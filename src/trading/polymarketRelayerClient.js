@@ -4,6 +4,7 @@
  * Balance: when funder is set we read USDC on-chain from the proxy so Budget and "insufficient funds" use the real balance.
  */
 import crypto from "node:crypto";
+import fs from "node:fs";
 import { ethers } from "ethers";
 import { ClobClient, Side, OrderType, SignatureType, AssetType } from "@polymarket/clob-client";
 import { CONFIG } from "../config.js";
@@ -33,6 +34,16 @@ async function getClobServerTime() {
 
 let sharedClient = null;
 let apiCredsResolved = null;
+
+function appendApiLog(entry) {
+  try {
+    fs.mkdirSync("./logs", { recursive: true });
+    const line = JSON.stringify(entry);
+    fs.appendFileSync("./logs/api.log", `${line}\n`, "utf8");
+  } catch {
+    // ignore logging errors
+  }
+}
 
 /**
  * Adapter so ethers v6 Wallet works with @polymarket/clob-client (which expects _signTypedData).
@@ -269,6 +280,13 @@ export async function getUsdcBalance() {
 export async function placeOrder({ tokenId, side, size, price, tickSize = "0.01", negRisk = false }) {
   const client = await getClobClient();
   if (!client) {
+    appendApiLog({
+      ts: new Date().toISOString(),
+      type: "clob_order",
+      level: "error",
+      ctx: "no_clob_client",
+      request: { tokenId, side, size, price, tickSize, negRisk }
+    });
     return { error: "no_clob_client" };
   }
   try {
@@ -294,22 +312,49 @@ export async function placeOrder({ tokenId, side, size, price, tickSize = "0.01"
 
     const response = await client.createAndPostOrder(orderReq, orderOpts, OrderType.GTC);
 
+    const summary = {
+      orderID: response?.orderID ?? response?.orderId ?? null,
+      status: response?.status ?? null
+    };
+
     if (CONFIG.trading.debugLiveTrading) {
       console.log("[LiveTrade] CLOB response", {
-        orderId: response?.orderID ?? response?.orderId ?? null,
-        status: response?.status ?? null,
+        ...summary,
         raw: response
       });
     }
 
+    appendApiLog({
+      ts: new Date().toISOString(),
+      type: "clob_order",
+      level: "info",
+      request: { tokenId, side, size, price, tickSize, negRisk },
+      response: summary,
+      rawResponse: response
+    });
+
     return {
-      orderID: response?.orderID ?? response?.orderId ?? null,
-      status: response?.status ?? "ok"
+      orderID: summary.orderID,
+      status: summary.status ?? "ok"
     };
   } catch (err) {
     if (CONFIG.trading.debugLiveTrading) {
       console.error("[LiveTrade] CLOB order error", err);
     }
+    appendApiLog({
+      ts: new Date().toISOString(),
+      type: "clob_order",
+      level: "error",
+      request: { tokenId, side, size, price, tickSize, negRisk },
+      error: {
+        message: err?.message ?? String(err),
+        name: err?.name ?? undefined,
+        code: err?.code ?? undefined,
+        status: err?.status ?? err?.statusCode ?? undefined,
+        responseStatus: err?.response?.status ?? undefined,
+        responseData: err?.response?.data ?? undefined
+      }
+    });
     return {
       error: err?.message ?? String(err)
     };
