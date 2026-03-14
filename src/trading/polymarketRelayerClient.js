@@ -94,26 +94,58 @@ async function resolveApiCreds() {
 }
 
 /**
- * Get the shared CLOB client configured for the Polymarket smart wallet (signature type 2, funder).
+ * Get the shared CLOB client configured for the Polymarket wallet.
+ * Signature type and funder are configurable via env.
  * @returns {Promise<import("@polymarket/clob-client").ClobClient | null>}
  */
 async function getClobClient() {
   if (sharedClient) return sharedClient;
   const signer = getSigner();
-  const funderAddress = CONFIG.polymarket?.funderAddress?.trim();
-  if (!signer || !funderAddress) return null;
+  const funderEnv = CONFIG.polymarket?.funderAddress?.trim();
+  if (!signer) return null;
 
   const creds = await resolveApiCreds();
   if (!creds) return null;
+
+  let signerAddress;
+  try {
+    signerAddress = await signer.getAddress();
+  } catch {
+    return null;
+  }
+
+  const rawSigType = Number(CONFIG.polymarket?.signatureType ?? SignatureType.POLY_GNOSIS_SAFE);
+  let signatureType;
+  if (rawSigType === SignatureType.EOA || rawSigType === 0) {
+    signatureType = SignatureType.EOA;
+  } else if (rawSigType === SignatureType.POLY_PROXY || rawSigType === 1) {
+    signatureType = SignatureType.POLY_PROXY;
+  } else {
+    signatureType = SignatureType.POLY_GNOSIS_SAFE;
+  }
+
+  // For EOA trading, default funder to signer address; for proxy/safe, require env funder.
+  const funderAddress = signatureType === SignatureType.EOA ? signerAddress : funderEnv;
+  if (!funderAddress) return null;
 
   sharedClient = new ClobClient(
     CONFIG.clobBaseUrl,
     CONFIG.trading.chainId,
     signer,
     creds,
-    SignatureType.POLY_GNOSIS_SAFE,
+    signatureType,
     funderAddress
   );
+
+  appendApiLog({
+    ts: new Date().toISOString(),
+    type: "clob_client_init",
+    level: "info",
+    signerAddress,
+    funderAddress,
+    signatureType
+  });
+
   return sharedClient;
 }
 

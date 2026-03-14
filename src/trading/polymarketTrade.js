@@ -99,7 +99,11 @@ export async function executeTradeIfEnabled({
   });
 
   const orderId = placeResult.orderID ?? placeResult.orderId ?? null;
-  const error = placeResult.error ?? null;
+  let error = placeResult.error ?? null;
+  const rawStatus = placeResult.status;
+  if (!error && typeof rawStatus === "number" && Number.isFinite(rawStatus) && rawStatus >= 400) {
+    error = `http_${rawStatus}`;
+  }
   const status = error ? "error" : "ok";
 
   const result = {
