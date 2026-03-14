@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { CONFIG } from "./config.js";
 import { fetchKlines, fetchLastPrice } from "./data/binance.js";
 import { fetchChainlinkBtcUsd } from "./data/chainlink.js";
@@ -19,8 +20,10 @@ import { computeHeikenAshi, countConsecutive } from "./indicators/heikenAshi.js"
 import { detectRegime } from "./engines/regime.js";
 import { scoreDirection, applyTimeAwareness } from "./engines/probability.js";
 import { computeEdge, decide } from "./engines/edge.js";
+import { generateConfidenceScore } from "./engines/confidence.js";
 import { appendCsvRow, formatNumber, formatPct, getCandleWindowTiming, sleep } from "./utils.js";
 import { startBinanceTradeStream } from "./data/binanceWs.js";
+import { executeTradeIfEnabled } from "./trading/polymarketTrade.js";
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
@@ -36,6 +39,99 @@ function countVwapCrosses(closes, vwapSeries, lookback) {
     if ((prev > 0 && cur < 0) || (prev < 0 && cur > 0)) crosses += 1;
   }
   return crosses;
+}
+
+const simulatedTradesBySlug = {};
+let simulatedBudget = CONFIG.trading.simBudgetUsd ?? 0;
+let simulatedPnl = 0;
+const confidenceHistoryBySlug = {};
+
+function maybeSimulateBestEffortTrade({
+  marketSlug,
+  timeLeftMin,
+  marketUp,
+  marketDown,
+  ledger,
+  confidence,
+  now = new Date()
+}) {
+  if (!marketSlug) return null;
+
+  if (timeLeftMin === null || !Number.isFinite(Number(timeLeftMin))) return null;
+  const remaining = Number(timeLeftMin);
+  const minWindow = 1.5;
+  const maxWindow = 2;
+  if (remaining > maxWindow || remaining < minWindow) return null;
+
+  const history = confidenceHistoryBySlug[marketSlug] ?? [];
+  const nowMs = now.getTime();
+  const recentWindowMs = 60_000;
+  const recent = history.filter((h) => Number.isFinite(Number(h.ts)) && nowMs - h.ts <= recentWindowMs);
+
+  let best = null;
+  for (const h of recent) {
+    if (!Number.isFinite(Number(h.score))) continue;
+    if (!best || Math.abs(h.score) > Math.abs(best.score)) {
+      best = h;
+    }
+  }
+
+  const chosenScore = best?.score ?? confidence?.score ?? null;
+  const chosenDir = best?.direction ?? null;
+
+  let side = null;
+  if (chosenDir === "UP" || chosenDir === "DOWN") {
+    side = chosenDir;
+  } else if (Number.isFinite(Number(chosenScore))) {
+    side = Number(chosenScore) >= 0 ? "UP" : "DOWN";
+  }
+
+  if (!side) return null;
+
+  const priceCents = side === "UP" ? marketUp : marketDown;
+  if (priceCents === null || priceCents === undefined || !Number.isFinite(Number(priceCents))) return null;
+
+  const priceUsd = Number(priceCents) / 100;
+  if (priceUsd <= 0 || !Number.isFinite(priceUsd)) return null;
+
+  const key = marketSlug;
+  const state = ledger[key] ?? { spentUsd: 0, trades: 0 };
+  const betAmount = Number(CONFIG.trading.simBetAmountUsd ?? 0);
+  if (!Number.isFinite(betAmount) || betAmount <= 0) return null;
+
+  if (simulatedBudget < betAmount) return null;
+
+  const maxPerRound = betAmount;
+
+  if (state.spentUsd >= maxPerRound) return null;
+
+  const remainingBudget = Math.min(maxPerRound - state.spentUsd, betAmount);
+  const qty = remainingBudget / priceUsd;
+  if (!Number.isFinite(qty) || qty <= 0) return null;
+
+  const cost = qty * priceUsd;
+
+  const trade = {
+    at: now.toISOString(),
+    marketSlug,
+    side,
+    timeLeftMin: remaining,
+    priceUsd,
+    quantity: qty,
+    costUsd: cost,
+    confidenceScore: chosenScore ?? null,
+    confidenceDirection: best?.direction ?? confidence?.direction ?? null
+  };
+
+  ledger[key] = {
+    spentUsd: state.spentUsd + cost,
+    trades: state.trades + 1
+  };
+
+  simulatedTradesBySlug[key] = trade;
+  simulatedBudget -= cost;
+
+  return trade;
 }
 
 applyGlobalProxyFromEnv();
@@ -209,6 +305,27 @@ function parsePriceToBeat(market) {
 }
 
 const dumpedMarkets = new Set();
+
+const predictionHistory = [];
+let activePrediction = null;
+
+function renderPredictionHistoryRow() {
+  if (!predictionHistory.length) {
+    return kv("Success:", `${ANSI.gray}n/a${ANSI.reset}`);
+  }
+
+  const maxShown = 50;
+  const slice = predictionHistory.slice(0, maxShown);
+  const parts = [];
+
+  for (const p of slice) {
+    const arrow = p.side === "UP" ? "↑" : "↓";
+    const color = p.correct === true ? ANSI.green : p.correct === false ? ANSI.red : ANSI.gray;
+    parts.push(`${color}${arrow}${ANSI.reset}`);
+  }
+
+  return kv("Success:", parts.join(" "));
+}
 
 function safeFileSlug(x) {
   return String(x ?? "")
@@ -403,6 +520,8 @@ async function main() {
   let prevSpotPrice = null;
   let prevCurrentPrice = null;
   let priceToBeatState = { slug: null, value: null, setAtMs: null };
+  const simulatedTradeLedger = {};
+  let lastRealTradeAtMs = 0;
 
   const header = [
     "timestamp",
@@ -529,6 +648,17 @@ async function main() {
       const delta1m = lastClose !== null && close1mAgo !== null ? lastClose - close1mAgo : null;
       const delta3m = lastClose !== null && close3mAgo !== null ? lastClose - close3mAgo : null;
 
+      const confidence = generateConfidenceScore({
+        rsi: rsiNow,
+        macd,
+        vwap: vwapNow,
+        btcPrice: lastPrice,
+        haCandles: ha,
+        polymarketSnapshot: poly,
+        spotDelta1m: delta1m,
+        spotDelta3m: delta3m
+      });
+
       const haNarrative = (consec.color ?? "").toLowerCase() === "green" ? "LONG" : (consec.color ?? "").toLowerCase() === "red" ? "SHORT" : "NEUTRAL";
       const rsiNarrative = narrativeFromSlope(rsiSlope);
       const macdNarrative = narrativeFromSign(macd?.hist ?? null);
@@ -582,8 +712,84 @@ async function main() {
       const marketSlug = poly.ok ? String(poly.market?.slug ?? "") : "";
       const marketStartMs = poly.ok && poly.market?.eventStartTime ? new Date(poly.market.eventStartTime).getTime() : null;
 
+      if (marketSlug) {
+        const history = confidenceHistoryBySlug[marketSlug] ?? [];
+        history.unshift({
+          ts: Date.now(),
+          score: confidence.score,
+          direction: confidence.direction,
+          timeLeftMin
+        });
+        confidenceHistoryBySlug[marketSlug] = history.slice(0, 12);
+      }
+
       if (marketSlug && priceToBeatState.slug !== marketSlug) {
         priceToBeatState = { slug: marketSlug, value: null, setAtMs: null };
+        if (activePrediction && activePrediction.slug !== marketSlug) {
+          const finalPrice = activePrediction.lastPrice;
+          const ptb = activePrediction.priceToBeat;
+          if (finalPrice !== null && ptb !== null && Number.isFinite(Number(finalPrice)) && Number.isFinite(Number(ptb))) {
+            const f = Number(finalPrice);
+            const b = Number(ptb);
+            const correct = activePrediction.side === "UP" ? f > b : activePrediction.side === "DOWN" ? f < b : null;
+
+            predictionHistory.unshift({
+              slug: activePrediction.slug,
+              side: activePrediction.side,
+              correct
+            });
+            if (predictionHistory.length > 50) predictionHistory.length = 50;
+
+            const simulated = simulatedTradesBySlug[activePrediction.slug];
+            if (simulated) {
+              const win = correct === true;
+              const stake = simulated.costUsd;
+              const price = simulated.priceUsd;
+              const size = simulated.quantity;
+              const pnlUsd = win ? size * (1 - price) : -size * price;
+              simulatedPnl += pnlUsd;
+              simulatedBudget += stake + pnlUsd;
+
+              try {
+                appendCsvRow("./logs/simulated_trades.csv", [
+                  "settled_at",
+                  "market_slug",
+                  "side",
+                  "entry_time",
+                  "entry_time_left_min",
+                  "entry_price_usd",
+                  "cost_usd",
+                  "price_to_beat",
+                  "final_price",
+                  "correct",
+                  "confidence_score",
+                  "confidence_direction",
+                  "pnl_usd",
+                  "budget_after_usd"
+                ], [
+                  new Date().toISOString(),
+                  activePrediction.slug,
+                  simulated.side ?? activePrediction.side ?? "",
+                  simulated.at,
+                  simulated.timeLeftMin.toFixed(3),
+                  simulated.priceUsd.toFixed(4),
+                  simulated.costUsd.toFixed(4),
+                  b.toFixed(2),
+                  f.toFixed(2),
+                  String(correct),
+                  simulated.confidenceScore ?? "",
+                  simulated.confidenceDirection ?? "",
+                  pnlUsd.toFixed(4),
+                  simulatedBudget.toFixed(4)
+                ]);
+              } catch {
+                // ignore logging errors
+              }
+              delete simulatedTradesBySlug[activePrediction.slug];
+            }
+          }
+          activePrediction = null;
+        }
       }
 
       if (priceToBeatState.slug && priceToBeatState.value === null && currentPrice !== null) {
@@ -632,6 +838,23 @@ async function main() {
         }
       }
 
+      const betType = confidence.score > 0 ? "UP" : confidence.score < 0 ? "DOWN" : "NO TRADE";
+
+      if (marketSlug) {
+        if (!activePrediction) {
+          activePrediction = {
+            slug: marketSlug,
+            side: betType === "UP" || betType === "DOWN" ? betType : null,
+            priceToBeat,
+            lastPrice: currentPrice
+          };
+        } else if (activePrediction.slug === marketSlug) {
+          activePrediction.side = betType === "UP" || betType === "DOWN" ? betType : activePrediction.side;
+          activePrediction.priceToBeat = priceToBeat ?? activePrediction.priceToBeat;
+          activePrediction.lastPrice = currentPrice ?? activePrediction.lastPrice;
+        }
+      }
+
       const binanceSpotBaseLine = colorPriceLine({ label: "BTC (Binance)", price: spotPrice, prevPrice: prevSpotPrice, decimals: 0, prefix: "$" });
       const diffLine = (spotPrice !== null && currentPrice !== null && Number.isFinite(spotPrice) && Number.isFinite(currentPrice) && currentPrice !== 0)
         ? (() => {
@@ -667,6 +890,13 @@ async function main() {
               : ANSI.reset)
         : ANSI.reset;
 
+      const confidenceLine = kv("Confidence:", `${confidence.score.toFixed(0)} (${confidence.direction})`);
+      const successRow = renderPredictionHistoryRow();
+      const budgetLine = kv(
+        "Sim Budget:",
+        `$${formatNumber(simulatedBudget, 2)} (PnL: ${simulatedPnl >= 0 ? "+" : ""}$${formatNumber(simulatedPnl, 2)})`
+      );
+
       const lines = [
         titleLine,
         marketLine,
@@ -675,6 +905,9 @@ async function main() {
         sepLine(),
         "",
         kv("TA Predict:", predictValue),
+        confidenceLine,
+        budgetLine,
+        successRow,
         kv("Heiken Ashi:", heikenLine.split(": ")[1] ?? heikenLine),
         kv("RSI:", rsiLine.split(": ")[1] ?? rsiLine),
         kv("MACD:", macdLine.split(": ")[1] ?? macdLine),
@@ -698,10 +931,55 @@ async function main() {
         kv("ET | Session:", `${ANSI.white}${fmtEtTime(new Date())}${ANSI.reset} | ${ANSI.white}${getBtcSession(new Date())}${ANSI.reset}`),
         "",
         sepLine(),
-        centerText(`${ANSI.dim}${ANSI.gray}created by @krajekis${ANSI.reset}`, screenWidth())
+        centerText(`${ANSI.dim}${ANSI.gray}Currently thinking ${betType}${ANSI.reset}`, screenWidth())
       ].filter((x) => x !== null);
 
       renderScreen(lines.join("\n") + "\n");
+
+      const nowMs = Date.now();
+      const minutesSinceLastTrade = lastRealTradeAtMs === 0 ? Infinity : (nowMs - lastRealTradeAtMs) / 60_000;
+      const inCooldown = minutesSinceLastTrade < CONFIG.trading.cooldownMinutes;
+
+      const absConfidence = Math.abs(confidence.score);
+      const shouldAttemptRealTrade = !inCooldown
+        && absConfidence >= CONFIG.trading.tradeThreshold
+        && timeLeftMin !== null
+        && Number.isFinite(Number(timeLeftMin))
+        && Number(timeLeftMin) <= 2
+        && Number(timeLeftMin) >= 0
+        && poly.ok;
+
+      if (shouldAttemptRealTrade) {
+        const tradeSide = confidence.score > 0 ? "UP" : "DOWN";
+        const result = await executeTradeIfEnabled({
+          side: tradeSide,
+          amountUsd: CONFIG.trading.positionSizeUsd,
+          marketSnapshot: poly,
+          confidenceScore: confidence.score
+        });
+
+        if (result.status === "ok") {
+          lastRealTradeAtMs = nowMs;
+          console.log(`Live trade executed: ${tradeSide} $${CONFIG.trading.positionSizeUsd.toFixed(2)} (confidence ${confidence.score.toFixed(0)}) orderId=${result.orderId ?? "-"} `);
+        } else {
+          console.log(`Trade skipped: ${result.status} (${result.reason ?? result.errorMessage ?? ""})`);
+        }
+      }
+
+      const simulatedTrade = maybeSimulateBestEffortTrade({
+        marketSlug,
+        timeLeftMin,
+        marketUp,
+        marketDown,
+        ledger: simulatedTradeLedger,
+        confidence,
+        confidenceHistory: confidenceHistoryBySlug[marketSlug] ?? []
+      });
+
+      if (simulatedTrade) {
+        const msg = `Simulated trade: ${simulatedTrade.side} $${simulatedTrade.costUsd.toFixed(2)} (${simulatedTrade.quantity.toFixed(4)} @ $${simulatedTrade.priceUsd.toFixed(4)}) on ${simulatedTrade.marketSlug} with ~${fmtTimeLeft(simulatedTrade.timeLeftMin)} left`;
+        console.log(msg);
+      }
 
       prevSpotPrice = spotPrice ?? prevSpotPrice;
       prevCurrentPrice = currentPrice ?? prevCurrentPrice;

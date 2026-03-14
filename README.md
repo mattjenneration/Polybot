@@ -87,8 +87,8 @@ You can set them in your shell, or create a `.env` file and load it using your p
 
 - `POLYMARKET_AUTO_SELECT_LATEST` (default: `true`)
   - When `true`, automatically picks the latest 15m market.
-- `POLYMARKET_SERIES_ID` (default: `10192`)
-- `POLYMARKET_SERIES_SLUG` (default: `btc-up-or-down-15m`)
+- `POLYMARKET_SERIES_ID` (default: `10191`)
+- `POLYMARKET_SERIES_SLUG` (default: `btc-up-or-down-5m`)
 - `POLYMARKET_SLUG` (optional)
   - If set, the assistant will target a specific market slug.
 - `POLYMARKET_LIVE_WS_URL` (default: `wss://ws-live-data.polymarket.com`)
