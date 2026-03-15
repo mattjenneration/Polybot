@@ -47,6 +47,8 @@ export const CONFIG = {
     chainId: 137,
     simBudgetUsd: Number(process.env.BUDGET_USD ?? "0"),
     simBetAmountUsd: Number(process.env.BET_AMOUNT_USD ?? "0"),
-    debugLiveTrading: (process.env.DEBUG_LIVE_TRADING || "false").toLowerCase() === "true"
+    debugLiveTrading: (process.env.DEBUG_LIVE_TRADING || "false").toLowerCase() === "true",
+    // Market order type: FAK = fill what's available (partial ok), FOK = fill entire amount or cancel
+    marketOrderType: (process.env.MARKET_ORDER_TYPE || "FAK").toUpperCase() === "FOK" ? "FOK" : "FAK"
   }
 };

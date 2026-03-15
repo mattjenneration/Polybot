@@ -440,7 +440,8 @@ export async function placeMarketOrder({ tokenId, side, amountUsd, worstPrice, t
     }
 
     const marketOrder = await client.createMarketOrder(orderReq, orderOpts);
-    const response = await client.postOrder(marketOrder, OrderType.FOK);
+    const orderType = CONFIG.trading.marketOrderType === "FOK" ? OrderType.FOK : OrderType.FAK;
+    const response = await client.postOrder(marketOrder, orderType);
 
     const summary = {
       orderID: response?.orderID ?? response?.orderId ?? null,
@@ -458,7 +459,7 @@ export async function placeMarketOrder({ tokenId, side, amountUsd, worstPrice, t
       ts: new Date().toISOString(),
       type: "clob_market_order",
       level: "info",
-      request: { tokenId, side, amountUsd, worstPrice, tickSize, negRisk },
+      request: { tokenId, side, amountUsd, worstPrice, tickSize, negRisk, orderType: CONFIG.trading.marketOrderType },
       response: summary,
       rawResponse: response
     });

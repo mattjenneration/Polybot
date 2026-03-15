@@ -987,7 +987,6 @@ async function main() {
         });
 
         if (result.status === "ok") {
-          lastRealTradeAtMs = nowMs;
           console.log(`Live trade executed: ${tradeSide} $${CONFIG.trading.positionSizeUsd.toFixed(2)} (confidence ${confidence.score.toFixed(0)}) orderId=${result.orderId ?? "-"} `);
         } else {
           const reasonStr = result.reason ?? result.errorMessage ?? "";
@@ -996,6 +995,8 @@ async function main() {
             : "";
           console.log(`Trade skipped: ${result.status} (${reasonStr}${addrStr})`);
         }
+        // Cooldown after any attempt (success or failure) so we don't retry every poll in the same window
+        lastRealTradeAtMs = nowMs;
       }
 
       if (!CONFIG.trading.enableLiveTrading) {
