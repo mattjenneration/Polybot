@@ -30,6 +30,118 @@ import path from "node:path";
 import readline from "node:readline";
 import { applyGlobalProxyFromEnv } from "./net/proxy.js";
 
+function parseArgValue(flag) {
+  const i = process.argv.indexOf(flag);
+  if (i === -1) return null;
+  return process.argv[i + 1] ?? null;
+}
+
+function fmtLocal(ts) {
+  const d = new Date(ts);
+  if (!Number.isFinite(d.getTime())) return String(ts ?? "");
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function clip(s, n) {
+  const x = String(s ?? "");
+  return x.length <= n ? x : `${x.slice(0, Math.max(0, n - 1))}…`;
+}
+
+function renderTable(rows, cols) {
+  const widths = cols.map((c) => c.width);
+  const sep = widths.map((w) => "─".repeat(w)).join("─┼─");
+  const header = cols.map((c, idx) => clip(c.label, widths[idx]).padEnd(widths[idx], " ")).join(" │ ");
+
+  const out = [];
+  out.push(header);
+  out.push(sep);
+  for (const r of rows) {
+    out.push(
+      cols
+        .map((c, idx) => {
+          const v = c.get(r);
+          return clip(v, widths[idx]).padEnd(widths[idx], " ");
+        })
+        .join(" │ ")
+    );
+  }
+  return out.join("\n");
+}
+
+function viewApiLog() {
+  const logPath = path.resolve("./logs/api.log");
+  if (!fs.existsSync(logPath)) {
+    console.log(`No api log found at ${logPath}`);
+    process.exit(0);
+  }
+
+  const limitRaw = parseArgValue("--limit");
+  const limit = limitRaw && Number.isFinite(Number(limitRaw)) ? Math.max(1, Math.floor(Number(limitRaw))) : 200;
+  const onlyTrades = process.argv.includes("--trades-only");
+
+  const text = fs.readFileSync(logPath, "utf8");
+  const lines = text.split(/\r?\n/).filter(Boolean);
+  const entries = [];
+  for (const line of lines) {
+    try {
+      const obj = JSON.parse(line);
+      if (!obj || typeof obj !== "object") continue;
+      if (onlyTrades && obj.type !== "clob_market_order" && obj.type !== "clob_order") continue;
+      entries.push(obj);
+    } catch {
+      // ignore bad lines
+    }
+  }
+
+  entries.sort((a, b) => String(a.ts ?? "").localeCompare(String(b.ts ?? "")));
+  const slice = entries.slice(-limit);
+
+  const ANSI_LOCAL = {
+    reset: "\x1b[0m",
+    green: "\x1b[32m",
+    red: "\x1b[31m",
+    gray: "\x1b[90m"
+  };
+
+  const rows = slice.map((e) => {
+    const req = e.request || {};
+    const resp = e.rawResponse || e.response || {};
+    const orderId = (e.response && (e.response.orderID ?? e.response.orderId)) ?? resp.orderID ?? resp.orderId ?? null;
+    const wentThrough = Boolean(orderId);
+    const status = (e.response && e.response.status) ?? resp.status ?? "";
+    const worst = req.worstPrice ?? req.price ?? "";
+    const amt = req.amountUsd ?? req.amount ?? req.size ?? "";
+    const side = req.side ?? "";
+    const okMark = wentThrough ? `${ANSI_LOCAL.green}YES${ANSI_LOCAL.reset}` : `${ANSI_LOCAL.red}NO${ANSI_LOCAL.reset}`;
+    const statusStr = wentThrough ? `${ANSI_LOCAL.green}${status}${ANSI_LOCAL.reset}` : `${ANSI_LOCAL.gray}${status}${ANSI_LOCAL.reset}`;
+    return {
+      ts: fmtLocal(e.ts),
+      type: e.type ?? "",
+      side,
+      amount: amt === "" ? "" : Number.isFinite(Number(amt)) ? Number(amt).toFixed(2) : String(amt),
+      worstPrice: worst === "" ? "" : Number.isFinite(Number(worst)) ? Number(worst).toFixed(4) : String(worst),
+      status: statusStr,
+      wentThrough: okMark,
+      orderId: orderId ? clip(orderId, 12) : ""
+    };
+  });
+
+  console.log(
+    renderTable(rows, [
+      { label: "Time (local)", width: 19, get: (r) => r.ts },
+      { label: "Type", width: 15, get: (r) => r.type },
+      { label: "Side", width: 5, get: (r) => r.side },
+      { label: "$ Amt", width: 7, get: (r) => r.amount },
+      { label: "Worst", width: 7, get: (r) => r.worstPrice },
+      { label: "Status", width: 12, get: (r) => r.status },
+      { label: "OK?", width: 3, get: (r) => r.wentThrough },
+      { label: "Order", width: 12, get: (r) => r.orderId }
+    ])
+  );
+  process.exit(0);
+}
+
 function countVwapCrosses(closes, vwapSeries, lookback) {
   if (closes.length < lookback || vwapSeries.length < lookback) return null;
   let crosses = 0;
@@ -136,6 +248,10 @@ function maybeSimulateBestEffortTrade({
 }
 
 applyGlobalProxyFromEnv();
+
+if (process.argv.includes("--api-log")) {
+  viewApiLog();
+}
 
 function fmtTimeLeft(mins) {
   const totalSeconds = Math.max(0, Math.floor(mins * 60));
