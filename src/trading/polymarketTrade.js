@@ -85,6 +85,13 @@ export async function executeTradeIfEnabled({
     return { status: "skipped", reason: "bad_price" };
   }
 
+  // Risk control: never bid if the outcome probability is already very high.
+  // This avoids buying at/near 1.00 where a correct pick only pays back a tiny amount.
+  const neverBidAbove = 0.95;
+  if (basePrice > neverBidAbove) {
+    return { status: "skipped", reason: "market_price_above_95c" };
+  }
+
   let worstPrice = basePrice * (1 + slippagePct);
   if (worstPrice < minPrice) worstPrice = minPrice;
   if (worstPrice > maxPrice) worstPrice = maxPrice;
