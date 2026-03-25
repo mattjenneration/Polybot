@@ -6,6 +6,10 @@
   "scripts": {
     "start": "node src/index.js",
     "dashboard": "node src/server.js",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:stop": "pm2 stop ecosystem.config.cjs",
+    "pm2:restart": "pm2 restart ecosystem.config.cjs",
+    "pm2:delete": "pm2 delete ecosystem.config.cjs",
     "test:trading": "ENABLE_LIVE_TRADING=true POLYMARKET_FUNDER_ADDRESS= POLY_FUNDER_ADDRESS= PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000001 node --test src/trading/polymarketTrade.test.js"
   },
   "dependencies": {
@@ -17,5 +21,8 @@
     "socks-proxy-agent": "^8.0.5",
     "undici": "^6.21.3",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "pm2": "^6.0.14"
   }
 }
