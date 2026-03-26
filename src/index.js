@@ -22,7 +22,6 @@ import { detectRegime } from "./engines/regime.js";
 import { scoreDirection, applyTimeAwareness } from "./engines/probability.js";
 import { computeEdge, decide } from "./engines/edge.js";
 import { generateConfidenceScore } from "./engines/confidence.js";
-import { evaluateGptIndicators } from "./indicators/gptIndicators.js";
 import { appendCsvRow, formatNumber, formatPct, getCandleWindowTiming, sleep } from "./utils.js";
 import { startBinanceTradeStream } from "./data/binanceWs.js";
 import { executeTradeIfEnabled, getUsdcBalanceUsd } from "./trading/polymarketTrade.js";
@@ -203,10 +202,10 @@ function maybeSimulateBestEffortTrade({
 
   if (!side) return null;
 
-  const priceCents = side === "UP" ? marketUp : marketDown;
-  if (priceCents === null || priceCents === undefined || !Number.isFinite(Number(priceCents))) return null;
+  const rawPrice = side === "UP" ? marketUp : marketDown;
+  if (rawPrice === null || rawPrice === undefined || !Number.isFinite(Number(rawPrice))) return null;
 
-  const priceUsd = Number(priceCents) / 100;
+  const priceUsd = Number(rawPrice);
   if (priceUsd <= 0 || !Number.isFinite(priceUsd)) return null;
 
   const key = marketSlug;
@@ -431,13 +430,16 @@ const predictionCheckpointSeconds = Array.isArray(CONFIG.trading?.predictionChec
 const predictionHistoryByCheckpoint = Object.fromEntries(predictionCheckpointSeconds.map((sec) => [sec, []]));
 const activePredictionsByCheckpoint = Object.fromEntries(predictionCheckpointSeconds.map((sec) => [sec, null]));
 const gptConfidenceHistory = [];
+const decisionTelemetryBySlug = {};
+const bidDecisionQueueBySlug = {};
 const gptIndicatorLogHeader = [
   "timestamp",
   "market_slug",
   "time_left_min",
-  "legacy_confidence",
-  "legacy_direction",
-  "gpt_score",
+  "confidence_score",
+  "confidence_direction",
+  "ta_score",
+  "gpt_composite_score",
   "gpt_direction",
   "gpt_confidence",
   "funding_score",
@@ -454,8 +456,6 @@ const gptIndicatorLogHeader = [
   "basis_value",
   "polymarket_micro_score",
   "polymarket_micro_confidence",
-  "momentum_dislocation_score",
-  "momentum_dislocation_confidence",
   "futures_basis_pct",
   "futures_funding_rate",
   "futures_open_interest_delta_pct",
@@ -557,6 +557,120 @@ function priceToBeatFromPolymarketMarket(market) {
   const n = extractNumericFromMarket(market);
   if (n !== null) return n;
   return parsePriceToBeat(market);
+}
+
+function recordDecisionTelemetry({ marketSlug, confidenceScore, taPredictScore, nowMs }) {
+  if (!marketSlug || !Number.isFinite(nowMs)) return;
+  const history = decisionTelemetryBySlug[marketSlug] ?? [];
+  history.push({
+    ts: nowMs,
+    confidenceScore: Number.isFinite(Number(confidenceScore)) ? Number(confidenceScore) : null,
+    taPredictScore: Number.isFinite(Number(taPredictScore)) ? Number(taPredictScore) : null
+  });
+  const cutoff = nowMs - 10 * 60_000;
+  decisionTelemetryBySlug[marketSlug] = history.filter((x) => Number.isFinite(x.ts) && x.ts >= cutoff).slice(-1200);
+}
+
+function queueBidDecision({
+  marketSlug,
+  side,
+  confidenceScore,
+  taPredictScore,
+  status,
+  reason,
+  amountUsd,
+  orderId,
+  tokenId,
+  nowIso
+}) {
+  if (!marketSlug || !side || (side !== "UP" && side !== "DOWN")) return;
+  const queue = bidDecisionQueueBySlug[marketSlug] ?? [];
+  queue.push({
+    timestamp: nowIso,
+    side,
+    confidenceScore: Number.isFinite(Number(confidenceScore)) ? Number(confidenceScore) : null,
+    taPredictScore: Number.isFinite(Number(taPredictScore)) ? Number(taPredictScore) : null,
+    status: String(status ?? ""),
+    reason: String(reason ?? ""),
+    amountUsd: Number.isFinite(Number(amountUsd)) ? Number(amountUsd) : null,
+    orderId: orderId ?? "",
+    tokenId: tokenId ?? ""
+  });
+  bidDecisionQueueBySlug[marketSlug] = queue.slice(-200);
+}
+
+function meanAbsDeviation(values, baseline) {
+  if (!Array.isArray(values) || !values.length || !Number.isFinite(Number(baseline))) return null;
+  const baselineNum = Number(baseline);
+  const deltas = values
+    .map((x) => Number(x))
+    .filter((x) => Number.isFinite(x))
+    .map((x) => Math.abs(x - baselineNum));
+  if (!deltas.length) return null;
+  return deltas.reduce((a, b) => a + b, 0) / deltas.length;
+}
+
+function flushBidDecisionOutcomes({ marketSlug, resolvedAtMs, priceToBeat, finalPrice }) {
+  const decisions = bidDecisionQueueBySlug[marketSlug] ?? [];
+  if (!decisions.length) return;
+  const outcomeSide = finalPrice > priceToBeat ? "UP" : finalPrice < priceToBeat ? "DOWN" : null;
+  const telemetry = decisionTelemetryBySlug[marketSlug] ?? [];
+  const windowStart = resolvedAtMs - 30_000;
+  const preOutcome = telemetry.filter((x) => Number.isFinite(x.ts) && x.ts >= windowStart && x.ts <= resolvedAtMs);
+
+  for (const d of decisions) {
+    const confSwingMeanAbs = meanAbsDeviation(preOutcome.map((x) => x.confidenceScore), d.confidenceScore);
+    const taPredictSwingMeanAbs = meanAbsDeviation(preOutcome.map((x) => x.taPredictScore), d.taPredictScore);
+    const outcome =
+      d.side && outcomeSide
+        ? (d.side === outcomeSide ? "WIN" : "LOSS")
+        : "PENDING";
+    const decisionType = d.status === "ok" ? "made" : "skipped";
+    try {
+      appendCsvRow("./logs/bid_decisions_outcomes.csv", [
+        "resolved_at",
+        "timestamp",
+        "market_slug",
+        "side",
+        "decision_type",
+        "status",
+        "reason",
+        "amount_usd",
+        "order_id",
+        "token_id",
+        "confidence_score",
+        "confidence_swing_mean_abs_30s",
+        "ta_predict_score",
+        "ta_predict_swing_mean_abs_30s",
+        "price_to_beat",
+        "final_price",
+        "outcome"
+      ], [
+        new Date(resolvedAtMs).toISOString(),
+        d.timestamp,
+        marketSlug,
+        d.side,
+        decisionType,
+        d.status,
+        d.reason,
+        d.amountUsd !== null ? d.amountUsd.toFixed(2) : "",
+        d.orderId ?? "",
+        d.tokenId ?? "",
+        d.confidenceScore !== null ? d.confidenceScore.toFixed(4) : "",
+        confSwingMeanAbs !== null ? confSwingMeanAbs.toFixed(4) : "",
+        d.taPredictScore !== null ? d.taPredictScore.toFixed(4) : "",
+        taPredictSwingMeanAbs !== null ? taPredictSwingMeanAbs.toFixed(4) : "",
+        Number(priceToBeat).toFixed(2),
+        Number(finalPrice).toFixed(2),
+        outcome
+      ]);
+    } catch {
+      // ignore logging errors
+    }
+  }
+
+  delete bidDecisionQueueBySlug[marketSlug];
+  delete decisionTelemetryBySlug[marketSlug];
 }
 
 const marketCache = {
@@ -824,15 +938,11 @@ async function main() {
         haCandles: ha,
         polymarketSnapshot: poly,
         spotDelta1m: delta1m,
-        spotDelta3m: delta3m
+        spotDelta3m: delta3m,
+        futuresSnapshot
       });
 
-      const gptIndicators = evaluateGptIndicators({
-        futuresSnapshot,
-        polymarketSnapshot: poly,
-        spotDelta1m: delta1m,
-        spotDelta3m: delta3m
-      });
+      const gptIndicators = confidence.gptIndicators;
 
       const haNarrative = (consec.color ?? "").toLowerCase() === "green" ? "LONG" : (consec.color ?? "").toLowerCase() === "red" ? "SHORT" : "NEUTRAL";
       const rsiNarrative = narrativeFromSlope(rsiSlope);
@@ -846,9 +956,14 @@ async function main() {
         : "NEUTRAL";
       const predictValue = `${ANSI.green}LONG${ANSI.reset} ${ANSI.green}${formatProbPct(pLong, 0)}${ANSI.reset} / ${ANSI.red}SHORT${ANSI.reset} ${ANSI.red}${formatProbPct(pShort, 0)}${ANSI.reset}`;
       const predictLine = `Predict: ${predictValue}`;
+      const taPredictScore = (Number.isFinite(Number(pLong)) && Number.isFinite(Number(pShort)))
+        ? (Number(pLong) - Number(pShort)) * 100
+        : null;
 
-      const marketUpStr = `${marketUp ?? "-"}${marketUp === null || marketUp === undefined ? "" : "¢"}`;
-      const marketDownStr = `${marketDown ?? "-"}${marketDown === null || marketDown === undefined ? "" : "¢"}`;
+      const marketUpStr =
+        marketUp === null || marketUp === undefined ? "-" : `${formatNumber(Number(marketUp) * 100, 0)}¢`;
+      const marketDownStr =
+        marketDown === null || marketDown === undefined ? "-" : `${formatNumber(Number(marketDown) * 100, 0)}¢`;
       const polyHeaderValue = `${ANSI.green}↑ UP${ANSI.reset} ${marketUpStr}  |  ${ANSI.red}↓ DOWN${ANSI.reset} ${marketDownStr}`;
 
       const heikenValue = `${consec.color ?? "-"} x${consec.count}`;
@@ -908,6 +1023,12 @@ async function main() {
           timeLeftMin
         });
         confidenceHistoryBySlug[marketSlug] = history.slice(0, 12);
+        recordDecisionTelemetry({
+          marketSlug,
+          confidenceScore: confidence.score,
+          taPredictScore,
+          nowMs: Date.now()
+        });
       }
 
       gptConfidenceHistory.unshift(gptIndicators.score);
@@ -920,12 +1041,14 @@ async function main() {
           .filter((p) => p && p.slug && p.slug !== marketSlug);
         if (previousPredictions.length) {
           const primaryPrediction = activePredictionsByCheckpoint[60] ?? previousPredictions[0];
+          const resolvedBySlug = {};
           for (const pred of previousPredictions) {
             const finalPrice = pred.lastPrice;
             const ptb = pred.priceToBeat;
             if (finalPrice !== null && ptb !== null && Number.isFinite(Number(finalPrice)) && Number.isFinite(Number(ptb))) {
               const f = Number(finalPrice);
               const b = Number(ptb);
+              resolvedBySlug[pred.slug] = { finalPrice: f, priceToBeat: b };
               const correct = pred.side === "UP" ? f > b : pred.side === "DOWN" ? f < b : null;
               const history = predictionHistoryByCheckpoint[pred.checkpointSec] ?? [];
               history.unshift({ slug: pred.slug, side: pred.side, correct });
@@ -1003,6 +1126,15 @@ async function main() {
                 }
               }
             }
+          }
+          const resolvedAtMs = Date.now();
+          for (const [slug, resolved] of Object.entries(resolvedBySlug)) {
+            flushBidDecisionOutcomes({
+              marketSlug: slug,
+              resolvedAtMs,
+              priceToBeat: resolved.priceToBeat,
+              finalPrice: resolved.finalPrice
+            });
           }
           for (const sec of predictionCheckpointSeconds) {
             activePredictionsByCheckpoint[sec] = null;
@@ -1116,14 +1248,17 @@ async function main() {
               : ANSI.reset)
         : ANSI.reset;
 
-      const confidenceLine = kv("Confidence:", `${confidence.score.toFixed(0)} (${confidence.direction})`);
+      const confidenceLine = kv(
+        "Confidence:",
+        `${confidence.score.toFixed(0)} (${confidence.direction})  ${ANSI.dim}TA ${confidence.taScore?.toFixed(0) ?? "-"} · aux ${confidence.auxiliaryScore?.toFixed(0) ?? "-"}${ANSI.reset}`
+      );
       const gptDirectionColor = gptIndicators.direction === "UP"
         ? ANSI.green
         : gptIndicators.direction === "DOWN"
           ? ANSI.red
           : ANSI.gray;
       const gptLine = kv(
-        "GPT-indicators:",
+        "Context (futures/OB):",
         `${gptDirectionColor}${gptIndicators.direction}${ANSI.reset} ${gptDirectionColor}${gptIndicators.score >= 0 ? "+" : ""}${gptIndicators.score.toFixed(0)}${ANSI.reset} (${gptIndicators.confidence}%)`
       );
       const topGpt = [...gptIndicators.indicators]
@@ -1222,6 +1357,8 @@ async function main() {
             predictDown: timeAware.adjustedDown,
             confidenceScore: confidence.score,
             confidenceDirection: confidence.direction,
+            confidenceTaScore: confidence.taScore,
+            confidenceAuxiliaryScore: confidence.auxiliaryScore,
             signal,
             gptDirection: gptIndicators.direction,
             gptScore: gptIndicators.score,
@@ -1285,6 +1422,18 @@ async function main() {
           marketSnapshot: poly,
           confidenceScore: confidence.score
         });
+        queueBidDecision({
+          marketSlug,
+          side: tradeSide,
+          confidenceScore: confidence.score,
+          taPredictScore,
+          status: result.status,
+          reason: result.reason ?? result.errorMessage ?? "",
+          amountUsd: CONFIG.trading.positionSizeUsd,
+          orderId: result.orderId ?? "",
+          tokenId: tradeSide === "UP" ? poly.tokens?.upTokenId ?? "" : poly.tokens?.downTokenId ?? "",
+          nowIso: new Date().toISOString()
+        });
 
         if (result.status === "ok") {
           console.log(`Live trade executed: ${tradeSide} $${CONFIG.trading.positionSizeUsd.toFixed(2)} (confidence ${confidence.score.toFixed(0)}) orderId=${result.orderId ?? "-"} `);
@@ -1339,7 +1488,6 @@ async function main() {
       const longShortIndicator = gptIndicators.byName.long_short;
       const basisIndicator = gptIndicators.byName.basis;
       const polymarketMicroIndicator = gptIndicators.byName.polymarket_micro;
-      const momentumDislocationIndicator = gptIndicators.byName.momentum_dislocation;
 
       appendCsvRow("./logs/gpt_indicators.csv", gptIndicatorLogHeader, [
         new Date().toISOString(),
@@ -1347,6 +1495,7 @@ async function main() {
         timeLeftMin.toFixed(3),
         confidence.score.toFixed(2),
         confidence.direction,
+        confidence.taScore?.toFixed(2) ?? "",
         gptIndicators.score.toFixed(2),
         gptIndicators.direction,
         gptIndicators.confidence,
@@ -1364,8 +1513,6 @@ async function main() {
         basisIndicator?.value ?? "",
         polymarketMicroIndicator?.score ?? "",
         polymarketMicroIndicator?.confidence ?? "",
-        momentumDislocationIndicator?.score ?? "",
-        momentumDislocationIndicator?.confidence ?? "",
         futuresSnapshot?.basisPct ?? "",
         futuresSnapshot?.fundingRate ?? "",
         futuresSnapshot?.openInterestDeltaPct ?? "",

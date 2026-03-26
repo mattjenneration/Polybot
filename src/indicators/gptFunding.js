@@ -35,6 +35,6 @@ export function scoreFundingIndicator({ fundingRate }) {
     confidence: Math.round((Math.abs(score) / maxAbsScore) * 100),
     direction: score > 0 ? "UP" : score < 0 ? "DOWN" : "FLAT",
     value: fr,
-    summary: `Funding ${(fr * 100).toFixed(4)}%`
+    summary: `Funding ${(fr * 10_000).toFixed(2)} bps`
   };
 }

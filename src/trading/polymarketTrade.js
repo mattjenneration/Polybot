@@ -30,6 +30,12 @@ function resolveMaxBidPriceForConfidence(confidenceScore) {
   return Math.max(0.01, Math.min(0.99, resolved));
 }
 
+function floorToTick(value, tick) {
+  const safeTick = Number.isFinite(Number(tick)) && Number(tick) > 0 ? Number(tick) : 0.01;
+  const units = Math.floor((Number(value) + Number.EPSILON) / safeTick);
+  return units * safeTick;
+}
+
 export async function executeTradeIfEnabled({
   side,
   amountUsd,
@@ -163,8 +169,16 @@ export async function executeTradeIfEnabled({
   if (worstPrice < minPrice) worstPrice = minPrice;
   if (worstPrice > exchangeMaxPrice) worstPrice = exchangeMaxPrice;
   if (worstPrice > maxBidPriceForConfidence) worstPrice = maxBidPriceForConfidence;
-  worstPrice = Math.round(worstPrice / tick) * tick;
+  // Never round up above the confidence cap; always round down to tick.
+  worstPrice = floorToTick(worstPrice, tick);
+  if (worstPrice > maxBidPriceForConfidence) {
+    worstPrice = floorToTick(maxBidPriceForConfidence, tick);
+  }
+  if (worstPrice < minPrice) worstPrice = minPrice;
   if (worstPrice >= 1) worstPrice = exchangeMaxPrice;
+  if (worstPrice > maxBidPriceForConfidence) {
+    return { status: "skipped", reason: "worst_price_above_confidence_max_after_rounding" };
+  }
 
   const price = basePrice;
   const size = amountUsd / price;

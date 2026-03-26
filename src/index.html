@@ -26,6 +26,18 @@
           <p class="text-slate-500 text-[10px] font-bold uppercase tracking-widest">Account (Polymarket)</p>
           <p id="totalVal" class="text-4xl font-black text-white tracking-tighter">—</p>
           <p id="lastSync" class="text-[10px] text-slate-600 font-mono mt-1"></p>
+          <div class="mt-3">
+            <a
+              id="claim-btn"
+              href="https://polymarket.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center justify-center rounded-lg bg-indigo-600 hover:bg-indigo-500 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-white"
+              title="Open Polymarket to claim winnings"
+            >
+              Claim
+            </a>
+          </div>
         </div>
       </div>
     </header>
@@ -65,7 +77,7 @@
           <h2 class="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">Model &amp; signal</h2>
           <div class="space-y-2 text-sm">
             <p><span class="text-slate-500">Confidence</span> <span id="d-conf" class="font-mono text-white font-bold">—</span></p>
-            <p><span class="text-slate-500">GPT stack</span> <span id="d-gpt" class="font-mono text-slate-300">—</span></p>
+            <p><span class="text-slate-500">Context</span> <span id="d-gpt" class="font-mono text-slate-300">—</span></p>
             <p><span class="text-slate-500">TA predict</span> <span id="d-predict" class="font-mono text-slate-300">—</span></p>
             <p><span class="text-slate-500">Signal</span> <span id="d-signal" class="font-mono text-emerald-400 font-bold">—</span></p>
             <p><span class="text-slate-500">Regime</span> <span id="d-regime" class="font-mono text-slate-400">—</span></p>
@@ -90,8 +102,8 @@
 
       <div>
         <h2 class="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">Recent CLOB fills (api.log)</h2>
-        <div class="rounded-2xl border border-slate-800 overflow-hidden bg-[#161a1e] shadow-xl">
-          <table class="w-full text-left text-sm">
+        <div class="rounded-2xl border border-slate-800 overflow-x-auto bg-[#161a1e] shadow-xl">
+          <table class="w-full min-w-[640px] text-left text-sm whitespace-nowrap">
             <thead class="bg-[#0b0e11] text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-800">
               <tr>
                 <th class="p-4">Time (ET)</th>
@@ -131,15 +143,20 @@
       <div>
         <h2 class="text-lg font-bold text-white mb-3">Live trades (logged)</h2>
         <p class="text-xs text-slate-500 mb-2">Mapped to confidence from <code class="text-slate-400">trade_history.csv</code>; outcomes from Gamma once markets resolve.</p>
-        <div class="rounded-2xl border border-slate-800 overflow-hidden bg-[#161a1e]">
-          <table class="w-full text-left text-sm">
+        <div class="rounded-2xl border border-slate-800 overflow-x-auto bg-[#161a1e]">
+          <table class="w-full min-w-[700px] text-left text-sm whitespace-nowrap">
             <thead class="bg-[#0b0e11] text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-800">
               <tr>
                 <th class="p-3">Time</th>
+                <th class="p-3">Type</th>
                 <th class="p-3">Side</th>
-                <th class="p-3 text-right">Conf.</th>
+                <th class="p-3 text-right">Conf @ bid</th>
+                <th class="p-3 text-right">Conf swing 30s</th>
+                <th class="p-3 text-right">TA predict @ bid</th>
+                <th class="p-3 text-right">TA swing 30s</th>
                 <th class="p-3 text-right">$</th>
                 <th class="p-3">Status</th>
+                <th class="p-3">Reason</th>
                 <th class="p-3 text-center">Outcome</th>
               </tr>
             </thead>
@@ -150,8 +167,8 @@
 
       <div>
         <h2 class="text-lg font-bold text-white mb-3">Simulated (paper)</h2>
-        <div class="rounded-2xl border border-slate-800 overflow-hidden bg-[#161a1e]">
-          <table class="w-full text-left text-sm">
+        <div class="rounded-2xl border border-slate-800 overflow-x-auto bg-[#161a1e]">
+          <table class="w-full min-w-[620px] text-left text-sm whitespace-nowrap">
             <thead class="bg-[#0b0e11] text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-800">
               <tr>
                 <th class="p-3">Settled</th>
@@ -211,11 +228,18 @@
       return `$${Number(x).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     }
 
+    function polymarketClaimHref(address) {
+      const base = "https://polymarket.com/profile";
+      const addr = String(address || "").trim();
+      return addr ? `${base}/${encodeURIComponent(addr)}` : base;
+    }
+
     async function fetchLive() {
       try {
         const res = await fetch("/api/live");
         const j = await res.json();
         const d = j.dashboard;
+        $("claim-btn").href = polymarketClaimHref(j.wallet?.address);
         $("lastSync").textContent = `Wallet sync: ${new Date(j.lastUpdate).toLocaleTimeString()}`;
         const tv = j.wallet?.totalValue;
         $("totalVal").textContent =
@@ -240,8 +264,16 @@
 
         const cs = d.model?.confidenceScore;
         const dir = d.model?.confidenceDirection || "";
+        const ta = d.model?.confidenceTaScore;
+        const aux = d.model?.confidenceAuxiliaryScore;
+        const taAux =
+          ta != null && aux != null && Number.isFinite(Number(ta)) && Number.isFinite(Number(aux))
+            ? ` · TA ${Number(ta).toFixed(0)} · aux ${Number(aux).toFixed(0)}`
+            : "";
         $("d-conf").textContent =
-          cs !== null && cs !== undefined && Number.isFinite(Number(cs)) ? `${Number(cs).toFixed(0)} (${dir})` : "—";
+          cs !== null && cs !== undefined && Number.isFinite(Number(cs))
+            ? `${Number(cs).toFixed(0)} (${dir})${taAux}`
+            : "—";
         $("d-gpt").textContent =
           d.model?.gptDirection != null
             ? `${d.model.gptDirection} ${d.model.gptScore >= 0 ? "+" : ""}${Number(d.model.gptScore).toFixed(0)} (${d.model.gptConfidencePct}%)`
@@ -349,7 +381,19 @@
               .map((r) => {
                 const conf =
                   r.confidence !== null && Number.isFinite(Number(r.confidence))
-                    ? Number(r.confidence).toFixed(0)
+                    ? Number(r.confidence).toFixed(2)
+                    : "—";
+                const confSwing =
+                  r.confidenceSwingMeanAbs30s !== null && Number.isFinite(Number(r.confidenceSwingMeanAbs30s))
+                    ? Number(r.confidenceSwingMeanAbs30s).toFixed(2)
+                    : "—";
+                const taPredict =
+                  r.taPredictScore !== null && Number.isFinite(Number(r.taPredictScore))
+                    ? Number(r.taPredictScore).toFixed(2)
+                    : "—";
+                const taSwing =
+                  r.taPredictSwingMeanAbs30s !== null && Number.isFinite(Number(r.taPredictSwingMeanAbs30s))
+                    ? Number(r.taPredictSwingMeanAbs30s).toFixed(2)
                     : "—";
                 let oc = r.outcome;
                 let badge = "";
@@ -368,17 +412,25 @@
                     : r.side === "DOWN"
                       ? "text-rose-400"
                       : "";
+                const typeBadge = r.decisionType === "made"
+                  ? '<span class="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded font-bold">MADE</span>'
+                  : '<span class="text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded font-bold">SKIP</span>';
                 return `<tr class="border-b border-slate-800/50">
                   <td class="p-3 font-mono text-[11px] text-slate-400">${fmtEt(r.timestamp)}</td>
+                  <td class="p-3">${typeBadge}</td>
                   <td class="p-3 font-bold ${sideClass}">${r.side}</td>
                   <td class="p-3 text-right font-mono">${conf}</td>
+                  <td class="p-3 text-right font-mono text-slate-300">${confSwing}</td>
+                  <td class="p-3 text-right font-mono text-cyan-300">${taPredict}</td>
+                  <td class="p-3 text-right font-mono text-slate-300">${taSwing}</td>
                   <td class="p-3 text-right font-mono text-slate-300">${r.amountUsd ?? "—"}</td>
                   <td class="p-3 text-xs">${r.status}</td>
+                  <td class="p-3 text-xs text-slate-500">${r.reason || "—"}</td>
                   <td class="p-3 text-center">${badge}</td>
                 </tr>`;
               })
               .join("")
-          : '<tr><td colspan="6" class="p-6 text-center text-slate-500">No rows in range.</td></tr>';
+          : '<tr><td colspan="10" class="p-6 text-center text-slate-500">No rows in range.</td></tr>';
 
         const simRows = j.simulated || [];
         $("hist-sim").innerHTML = simRows.length

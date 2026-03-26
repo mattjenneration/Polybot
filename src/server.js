@@ -189,6 +189,7 @@ async function refreshCache() {
 
     const tradeHistory = readCsv(path.join(LOG_DIR, "trade_history.csv"));
     const debugRows = readCsv(path.join(LOG_DIR, "live_trades_debug.csv"));
+    const decisionRows = readCsv(path.join(LOG_DIR, "bid_decisions_outcomes.csv"));
 
     for (const t of trades) {
       const tsMs = new Date(t.ts).getTime();
@@ -206,6 +207,9 @@ async function refreshCache() {
         }
       }
       t.confidence = Number.isFinite(bestConf) ? bestConf : null;
+      t.confidenceSwingMeanAbs30s = null;
+      t.taPredict = null;
+      t.taPredictSwingMeanAbs30s = null;
 
       let slug = null;
       bestDt = Infinity;
@@ -222,6 +226,30 @@ async function refreshCache() {
         }
       }
       t.marketSlug = slug;
+
+      let decisionMatch = null;
+      bestDt = Infinity;
+      for (const row of decisionRows) {
+        if (String(row.side) !== String(t.side)) continue;
+        if (String(row.token_id || "") && String(row.token_id) !== String(t.tokenId)) continue;
+        const rts = new Date(row.timestamp).getTime();
+        if (!Number.isFinite(rts)) continue;
+        const dt = Math.abs(rts - tsMs);
+        if (dt < 25_000 && dt < bestDt) {
+          bestDt = dt;
+          decisionMatch = row;
+        }
+      }
+      if (decisionMatch) {
+        const dc = parseNumberOrNull(decisionMatch.confidence_score);
+        const dcs = parseNumberOrNull(decisionMatch.confidence_swing_mean_abs_30s);
+        const dtp = parseNumberOrNull(decisionMatch.ta_predict_score);
+        const dtps = parseNumberOrNull(decisionMatch.ta_predict_swing_mean_abs_30s);
+        if (Number.isFinite(dc)) t.confidence = dc;
+        t.confidenceSwingMeanAbs30s = dcs;
+        t.taPredict = dtp;
+        t.taPredictSwingMeanAbs30s = dtps;
+      }
     }
 
     cachedData = {
@@ -277,6 +305,12 @@ function parseIsoOrNull(s) {
   return Number.isFinite(t) ? t : null;
 }
 
+function parseNumberOrNull(x) {
+  if (x === null || x === undefined || x === "") return null;
+  const n = Number(x);
+  return Number.isFinite(n) ? n : null;
+}
+
 app.get("/api/live", async (req, res) => {
   const dashboard = readDashboard();
   const totalValue = await getAccountValue();
@@ -308,63 +342,38 @@ app.get("/api/history", (req, res) => {
   }
   if (fromMs === null) fromMs = Date.now() - 24 * 3600_000;
 
-  const tradeRows = readCsv(path.join(LOG_DIR, "trade_history.csv"));
+  const decisionRows = readCsv(path.join(LOG_DIR, "bid_decisions_outcomes.csv"));
   const simRows = readCsv(path.join(LOG_DIR, "simulated_trades.csv"));
-  const debugRows = readCsv(path.join(LOG_DIR, "live_trades_debug.csv"));
-
-  function matchDebug(ts, side, windowMs = 15_000) {
-    const tMs = new Date(ts).getTime();
-    if (!Number.isFinite(tMs)) return null;
-    let best = null;
-    let bestDt = Infinity;
-    for (const r of debugRows) {
-      if (String(r.side) !== String(side)) continue;
-      const rMs = new Date(r.timestamp).getTime();
-      if (!Number.isFinite(rMs)) continue;
-      const dt = Math.abs(rMs - tMs);
-      if (dt < windowMs && dt < bestDt) {
-        bestDt = dt;
-        best = r;
-      }
-    }
-    return best;
-  }
 
   const live = [];
-  for (const row of tradeRows) {
-    const ts = row.timestamp;
+  for (const row of decisionRows) {
+    const ts = row.timestamp || row.resolved_at;
     if (!ts) continue;
     const ms = new Date(ts).getTime();
     if (!Number.isFinite(ms) || ms < fromMs || ms > toMs) continue;
 
-    const dbg = matchDebug(ts, row.side);
-    const tokenId = dbg?.token_id ? String(dbg.token_id) : null;
-    const marketSlug = dbg?.market_slug ? String(dbg.market_slug) : "";
-
-    let outcome = null;
-    if (tokenId && outcomeCache[tokenId]) {
-      outcome = outcomeCache[tokenId];
-    } else if (tokenId) {
-      outcome = "PENDING";
-    } else {
-      outcome = row.status === "ok" ? "PENDING" : "—";
-    }
-
     const conf = row.confidence_score;
+    const confSwing = row.confidence_swing_mean_abs_30s;
+    const taPredict = row.ta_predict_score;
+    const taPredictSwing = row.ta_predict_swing_mean_abs_30s;
     live.push({
       kind: "live",
       timestamp: ts,
       status: row.status,
+      decisionType: row.decision_type || (row.status === "ok" ? "made" : "skipped"),
+      reason: row.reason || "",
       side: row.side,
       amountUsd: row.amount_usd,
-      price: row.price,
-      size: row.size,
+      priceToBeat: row.price_to_beat,
+      finalPrice: row.final_price,
       confidence: conf === "" ? null : Number(conf),
-      orderId: row.order_id,
-      error: row.error,
-      outcome,
-      tokenId,
-      marketSlug: marketSlug || null
+      confidenceSwingMeanAbs30s: confSwing === "" ? null : Number(confSwing),
+      taPredictScore: taPredict === "" ? null : Number(taPredict),
+      taPredictSwingMeanAbs30s: taPredictSwing === "" ? null : Number(taPredictSwing),
+      orderId: row.order_id || "",
+      outcome: row.outcome || "PENDING",
+      tokenId: row.token_id || null,
+      marketSlug: row.market_slug || null
     });
   }
 

@@ -6,6 +6,8 @@ export const CONFIG = {
 
   pollIntervalMs: 2_000,
   candleWindowMinutes: 5,
+  /** How much auxiliary futures + microstructure (-100..100) adds to TA confidence. */
+  confidenceAuxiliaryWeight: Math.max(0, Math.min(0.45, Number(process.env.CONFIDENCE_AUXILIARY_WEIGHT ?? "0.22"))),
 
   vwapSlopeLookbackMinutes: 5,
   rsiPeriod: 14,

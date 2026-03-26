@@ -5,6 +5,14 @@ export function clamp(x, min, max) {
   return Math.max(min, Math.min(max, x));
 }
 
+/** CLOB/Gamma prices are usually 0–1; some feeds use 0–100. */
+export function normalizeOutcomeProb(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n > 1) return n / 100;
+  return n;
+}
+
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

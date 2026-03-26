@@ -22,12 +22,14 @@ export function scoreOpenInterestIndicator({ openInterestDeltaPct, spotDelta3m }
   const oppositeDirection = (oiDelta > 0 && spot3m < 0) || (oiDelta < 0 && spot3m > 0);
 
   const intensity = clamp(Math.abs(oiDelta) / 0.01, 0, 1);
+  /** Dampen when 3m spot move is tiny in USD (OI is 5m; noisy pairing with near-flat spot). */
+  const spotSupport = clamp(Math.abs(spot3m) / 40, 0.2, 1);
   let score = 0;
 
-  if (sameDirection && spot3m > 0) score = Math.round(5 + intensity * 11);
-  else if (sameDirection && spot3m < 0) score = -Math.round(5 + intensity * 11);
-  else if (oppositeDirection && spot3m > 0) score = -Math.round(3 + intensity * 8);
-  else if (oppositeDirection && spot3m < 0) score = Math.round(3 + intensity * 8);
+  if (sameDirection && spot3m > 0) score = Math.round((5 + intensity * 11) * spotSupport);
+  else if (sameDirection && spot3m < 0) score = -Math.round((5 + intensity * 11) * spotSupport);
+  else if (oppositeDirection && spot3m > 0) score = -Math.round((3 + intensity * 8) * spotSupport);
+  else if (oppositeDirection && spot3m < 0) score = Math.round((3 + intensity * 8) * spotSupport);
 
   score = clamp(score, -maxAbsScore, maxAbsScore);
 
