@@ -147,17 +147,17 @@
           <table class="w-full min-w-[700px] text-left text-sm whitespace-nowrap">
             <thead class="bg-[#0b0e11] text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-800">
               <tr>
-                <th class="p-3">Time</th>
-                <th class="p-3">Type</th>
-                <th class="p-3">Side</th>
-                <th class="p-3 text-right">Conf @ bid</th>
-                <th class="p-3 text-right">Conf swing 30s</th>
-                <th class="p-3 text-right">TA predict @ bid</th>
-                <th class="p-3 text-right">TA swing 30s</th>
-                <th class="p-3 text-right">$</th>
-                <th class="p-3">Status</th>
-                <th class="p-3">Reason</th>
-                <th class="p-3 text-center">Outcome</th>
+                <th class="p-3"><button type="button" data-hist-sort="timestamp" class="hist-sort-btn">Time</button></th>
+                <th class="p-3"><button type="button" data-hist-sort="decisionType" class="hist-sort-btn">Type</button></th>
+                <th class="p-3"><button type="button" data-hist-sort="side" class="hist-sort-btn">Side</button></th>
+                <th class="p-3 text-right"><button type="button" data-hist-sort="confidence" class="hist-sort-btn">Conf @ bid</button></th>
+                <th class="p-3 text-right"><button type="button" data-hist-sort="confidenceSwingMeanAbs30s" class="hist-sort-btn">Conf swing 30s</button></th>
+                <th class="p-3 text-right"><button type="button" data-hist-sort="taPredictScore" class="hist-sort-btn">TA predict @ bid</button></th>
+                <th class="p-3 text-right"><button type="button" data-hist-sort="taPredictSwingMeanAbs30s" class="hist-sort-btn">TA swing 30s</button></th>
+                <th class="p-3 text-right"><button type="button" data-hist-sort="amountUsd" class="hist-sort-btn">$</button></th>
+                <th class="p-3"><button type="button" data-hist-sort="status" class="hist-sort-btn">Status</button></th>
+                <th class="p-3"><button type="button" data-hist-sort="reason" class="hist-sort-btn">Reason</button></th>
+                <th class="p-3 text-center"><button type="button" data-hist-sort="outcome" class="hist-sort-btn">Outcome</button></th>
               </tr>
             </thead>
             <tbody id="hist-live" class="divide-y divide-slate-800/40"></tbody>
@@ -191,6 +191,9 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
+    const HIST_SORT_ICONS = { asc: "↑", desc: "↓" };
+    const histLiveSort = { key: "timestamp", dir: "desc" };
+    let histLiveRows = [];
 
     function updateClocks() {
       const now = new Date();
@@ -226,6 +229,123 @@
     function fmtUsd(x) {
       if (x === null || x === undefined || !Number.isFinite(Number(x))) return "—";
       return `$${Number(x).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+
+    function sortRank(v) {
+      return v === null || v === undefined || v === "" ? 1 : 0;
+    }
+
+    function sortNum(v) {
+      return Number.isFinite(Number(v)) ? Number(v) : null;
+    }
+
+    function sortTime(v) {
+      const t = new Date(v).getTime();
+      return Number.isFinite(t) ? t : null;
+    }
+
+    function sortText(v) {
+      const s = String(v ?? "").trim();
+      return s || null;
+    }
+
+    function histSortValue(row, key) {
+      if (key === "timestamp") return sortTime(row.timestamp);
+      if (key === "confidence") return sortNum(row.confidence);
+      if (key === "confidenceSwingMeanAbs30s") return sortNum(row.confidenceSwingMeanAbs30s);
+      if (key === "taPredictScore") return sortNum(row.taPredictScore);
+      if (key === "taPredictSwingMeanAbs30s") return sortNum(row.taPredictSwingMeanAbs30s);
+      if (key === "amountUsd") return sortNum(row.amountUsd);
+      return sortText(row[key]);
+    }
+
+    function updateHistSortHeaders() {
+      document.querySelectorAll(".hist-sort-btn").forEach((btn) => {
+        const key = btn.getAttribute("data-hist-sort");
+        const base = btn.getAttribute("data-hist-label") || btn.textContent.replace(/\s+[↑↓]$/, "");
+        btn.setAttribute("data-hist-label", base);
+        const icon = key === histLiveSort.key ? ` ${HIST_SORT_ICONS[histLiveSort.dir]}` : "";
+        btn.textContent = `${base}${icon}`;
+      });
+    }
+
+    function sortHistLiveRows(rows) {
+      const dir = histLiveSort.dir === "asc" ? 1 : -1;
+      const key = histLiveSort.key;
+      return [...rows].sort((a, b) => {
+        const av = histSortValue(a, key);
+        const bv = histSortValue(b, key);
+        const rankDiff = sortRank(av) - sortRank(bv);
+        if (rankDiff !== 0) return rankDiff;
+        if (av === null && bv === null) return 0;
+        if (typeof av === "number" && typeof bv === "number") {
+          if (av === bv) return 0;
+          return av > bv ? dir : -dir;
+        }
+        const cmp = String(av).localeCompare(String(bv), undefined, { sensitivity: "base" });
+        if (cmp === 0) return 0;
+        return cmp > 0 ? dir : -dir;
+      });
+    }
+
+    function renderLiveHistoryRows() {
+      const rows = sortHistLiveRows(histLiveRows);
+      $("hist-live").innerHTML = rows.length
+        ? rows
+            .map((r) => {
+              const conf =
+                r.confidence !== null && Number.isFinite(Number(r.confidence))
+                  ? Number(r.confidence).toFixed(2)
+                  : "—";
+              const confSwing =
+                r.confidenceSwingMeanAbs30s !== null && Number.isFinite(Number(r.confidenceSwingMeanAbs30s))
+                  ? Number(r.confidenceSwingMeanAbs30s).toFixed(2)
+                  : "—";
+              const taPredict =
+                r.taPredictScore !== null && Number.isFinite(Number(r.taPredictScore))
+                  ? Number(r.taPredictScore).toFixed(2)
+                  : "—";
+              const taSwing =
+                r.taPredictSwingMeanAbs30s !== null && Number.isFinite(Number(r.taPredictSwingMeanAbs30s))
+                  ? Number(r.taPredictSwingMeanAbs30s).toFixed(2)
+                  : "—";
+              let oc = r.outcome;
+              let badge = "";
+              if (oc === "WIN") {
+                badge = '<span class="text-emerald-400 font-bold">WIN</span>';
+              } else if (oc === "LOSS") {
+                badge = '<span class="text-rose-400 font-bold">LOSS</span>';
+              } else if (oc === "PENDING") {
+                badge = '<span class="text-slate-500 text-[10px]">PENDING</span>';
+              } else {
+                badge = `<span class="text-slate-600">${oc || "—"}</span>`;
+              }
+              const sideClass =
+                r.side === "UP"
+                  ? "text-emerald-400"
+                  : r.side === "DOWN"
+                    ? "text-rose-400"
+                    : "";
+              const typeBadge = r.decisionType === "made"
+                ? '<span class="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded font-bold">MADE</span>'
+                : '<span class="text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded font-bold">SKIP</span>';
+              return `<tr class="border-b border-slate-800/50">
+                <td class="p-3 font-mono text-[11px] text-slate-400">${fmtEt(r.timestamp)}</td>
+                <td class="p-3">${typeBadge}</td>
+                <td class="p-3 font-bold ${sideClass}">${r.side}</td>
+                <td class="p-3 text-right font-mono">${conf}</td>
+                <td class="p-3 text-right font-mono text-slate-300">${confSwing}</td>
+                <td class="p-3 text-right font-mono text-cyan-300">${taPredict}</td>
+                <td class="p-3 text-right font-mono text-slate-300">${taSwing}</td>
+                <td class="p-3 text-right font-mono text-slate-300">${r.amountUsd ?? "—"}</td>
+                <td class="p-3 text-xs">${r.status}</td>
+                <td class="p-3 text-xs text-slate-500">${r.reason || "—"}</td>
+                <td class="p-3 text-center">${badge}</td>
+              </tr>`;
+            })
+            .join("")
+        : '<tr><td colspan="11" class="p-6 text-center text-slate-500">No rows in range.</td></tr>';
+      updateHistSortHeaders();
     }
 
     function polymarketClaimHref(address) {
@@ -375,62 +495,8 @@
       try {
         const res = await fetch("/api/history?" + historyQuery());
         const j = await res.json();
-        const liveRows = j.live || [];
-        $("hist-live").innerHTML = liveRows.length
-          ? liveRows
-              .map((r) => {
-                const conf =
-                  r.confidence !== null && Number.isFinite(Number(r.confidence))
-                    ? Number(r.confidence).toFixed(2)
-                    : "—";
-                const confSwing =
-                  r.confidenceSwingMeanAbs30s !== null && Number.isFinite(Number(r.confidenceSwingMeanAbs30s))
-                    ? Number(r.confidenceSwingMeanAbs30s).toFixed(2)
-                    : "—";
-                const taPredict =
-                  r.taPredictScore !== null && Number.isFinite(Number(r.taPredictScore))
-                    ? Number(r.taPredictScore).toFixed(2)
-                    : "—";
-                const taSwing =
-                  r.taPredictSwingMeanAbs30s !== null && Number.isFinite(Number(r.taPredictSwingMeanAbs30s))
-                    ? Number(r.taPredictSwingMeanAbs30s).toFixed(2)
-                    : "—";
-                let oc = r.outcome;
-                let badge = "";
-                if (oc === "WIN") {
-                  badge = '<span class="text-emerald-400 font-bold">WIN</span>';
-                } else if (oc === "LOSS") {
-                  badge = '<span class="text-rose-400 font-bold">LOSS</span>';
-                } else if (oc === "PENDING") {
-                  badge = '<span class="text-slate-500 text-[10px]">PENDING</span>';
-                } else {
-                  badge = `<span class="text-slate-600">${oc || "—"}</span>`;
-                }
-                const sideClass =
-                  r.side === "UP"
-                    ? "text-emerald-400"
-                    : r.side === "DOWN"
-                      ? "text-rose-400"
-                      : "";
-                const typeBadge = r.decisionType === "made"
-                  ? '<span class="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded font-bold">MADE</span>'
-                  : '<span class="text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded font-bold">SKIP</span>';
-                return `<tr class="border-b border-slate-800/50">
-                  <td class="p-3 font-mono text-[11px] text-slate-400">${fmtEt(r.timestamp)}</td>
-                  <td class="p-3">${typeBadge}</td>
-                  <td class="p-3 font-bold ${sideClass}">${r.side}</td>
-                  <td class="p-3 text-right font-mono">${conf}</td>
-                  <td class="p-3 text-right font-mono text-slate-300">${confSwing}</td>
-                  <td class="p-3 text-right font-mono text-cyan-300">${taPredict}</td>
-                  <td class="p-3 text-right font-mono text-slate-300">${taSwing}</td>
-                  <td class="p-3 text-right font-mono text-slate-300">${r.amountUsd ?? "—"}</td>
-                  <td class="p-3 text-xs">${r.status}</td>
-                  <td class="p-3 text-xs text-slate-500">${r.reason || "—"}</td>
-                  <td class="p-3 text-center">${badge}</td>
-                </tr>`;
-              })
-              .join("")
-          : '<tr><td colspan="10" class="p-6 text-center text-slate-500">No rows in range.</td></tr>';
+        histLiveRows = Array.isArray(j.live) ? j.live : [];
+        renderLiveHistoryRows();
 
         const simRows = j.simulated || [];
         $("hist-sim").innerHTML = simRows.length
@@ -463,6 +529,20 @@
       $("wrap-from").classList.toggle("hidden", !c);
       $("wrap-to").classList.toggle("hidden", !c);
     });
+    document.querySelectorAll(".hist-sort-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.getAttribute("data-hist-sort");
+        if (!key) return;
+        if (histLiveSort.key === key) {
+          histLiveSort.dir = histLiveSort.dir === "asc" ? "desc" : "asc";
+        } else {
+          histLiveSort.key = key;
+          histLiveSort.dir = key === "timestamp" ? "desc" : "asc";
+        }
+        renderLiveHistoryRows();
+      });
+    });
+    updateHistSortHeaders();
     $("hist-apply").addEventListener("click", loadHistory);
 
     fetchLive();
