@@ -4,6 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONFIG } from "./config.js";
+import { errorToRedactedLogString } from "./logRedact.js";
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[btc-dashboard] Unhandled rejection:", errorToRedactedLogString(reason));
+});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.DASHBOARD_PORT ?? "3000");
@@ -263,7 +268,7 @@ async function refreshCache() {
 
     resolvePending().catch(() => {});
   } catch (err) {
-    console.error("Refresh Error:", err?.message ?? err);
+    console.error("Refresh Error:", errorToRedactedLogString(err));
   }
 }
 

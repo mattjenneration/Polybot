@@ -1,4 +1,6 @@
+import { CONFIG } from "../config.js";
 import { clamp } from "../utils.js";
+import { evaluateGptIndicators } from "../indicators/gptIndicators.js";
 
 function classifyHaBodyStrength(haCandles) {
   if (!Array.isArray(haCandles) || haCandles.length === 0) {
@@ -26,7 +28,8 @@ export function generateConfidenceScore({
   haCandles,
   polymarketSnapshot,
   spotDelta1m,
-  spotDelta3m
+  spotDelta3m,
+  futuresSnapshot = null
 }) {
   let score = 0;
 
@@ -77,7 +80,8 @@ export function generateConfidenceScore({
     })();
 
     if (spotIsPumping && upPrice !== null && Number.isFinite(Number(upPrice))) {
-      const upProb = Number(upPrice) / 100;
+      const raw = Number(upPrice);
+      const upProb = raw > 1 ? raw / 100 : raw;
       if (upProb < 0.5) {
         score += 20;
       }
@@ -92,30 +96,33 @@ export function generateConfidenceScore({
     })();
 
     if (spotIsDumping && downPrice !== null && Number.isFinite(Number(downPrice))) {
-      const downProb = Number(downPrice) / 100;
+      const raw = Number(downPrice);
+      const downProb = raw > 1 ? raw / 100 : raw;
       if (downProb < 0.5) {
         score -= 20;
       }
     }
   }
 
-  score = clamp(score, -100, 100);
+  const taScore = clamp(score, -100, 100);
 
-  const direction = score > 0 ? "UP" : score < 0 ? "DOWN" : "FLAT";
+  const gptIndicators = evaluateGptIndicators({
+    futuresSnapshot,
+    polymarketSnapshot,
+    spotDelta1m,
+    spotDelta3m
+  });
+
+  const auxWeight = CONFIG.confidenceAuxiliaryWeight ?? 0.22;
+  const combined = clamp(taScore + auxWeight * gptIndicators.score, -100, 100);
+  const direction = combined > 0 ? "UP" : combined < 0 ? "DOWN" : "FLAT";
 
   return {
-    score,
+    score: combined,
     direction,
-    // Keep legacy fields so dashboard/log writers remain compatible.
-    taScore: score,
-    auxiliaryScore: 0,
-    gptIndicators: {
-      score: 0,
-      direction: "FLAT",
-      confidence: 0,
-      indicators: [],
-      byName: {}
-    }
+    taScore,
+    auxiliaryScore: gptIndicators.score,
+    gptIndicators
   };
 }
 

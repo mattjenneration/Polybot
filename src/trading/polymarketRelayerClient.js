@@ -8,6 +8,7 @@ import fs from "node:fs";
 import { ethers } from "ethers";
 import { ClobClient, Side, OrderType, SignatureType, AssetType } from "@polymarket/clob-client";
 import { CONFIG } from "../config.js";
+import { errorToRedactedLogString, redactSecretsInString, sanitizeForLog } from "../logRedact.js";
 
 const USDC_DECIMALS = 6;
 const ERC20_ABI = [
@@ -38,7 +39,7 @@ let apiCredsResolved = null;
 function appendApiLog(entry) {
   try {
     fs.mkdirSync("./logs", { recursive: true });
-    const line = JSON.stringify(entry);
+    const line = JSON.stringify(sanitizeForLog(entry));
     fs.appendFileSync("./logs/api.log", `${line}\n`, "utf8");
   } catch {
     // ignore logging errors
@@ -88,7 +89,7 @@ async function resolveApiCreds() {
     apiCredsResolved = creds;
     return creds;
   } catch (err) {
-    console.error("[Polymarket] Failed to create/derive API key:", err?.message ?? String(err));
+    console.error("[Polymarket] Failed to create/derive API key:", errorToRedactedLogString(err));
     return null;
   }
 }
@@ -225,10 +226,9 @@ async function getBalanceAllowanceWithFunderAddress() {
       } catch {
         body = text;
       }
-      console.error(
-        `[Polymarket balance] API error: ${res.status} ${res.statusText} | body:`,
-        typeof body === "object" ? JSON.stringify(body) : body
-      );
+      const bodyStr =
+        typeof body === "object" ? redactSecretsInString(JSON.stringify(body)) : redactSecretsInString(String(body ?? ""));
+      console.error(`[Polymarket balance] API error: ${res.status} ${res.statusText} | body:`, bodyStr);
       return null;
     }
     const data = await res.json();
@@ -236,7 +236,7 @@ async function getBalanceAllowanceWithFunderAddress() {
     if (balance === undefined || balance === null) return null;
     return { balance: String(balance), allowance: data?.allowance ?? data?.data?.allowance ?? "0" };
   } catch (err) {
-    console.error("[Polymarket balance] Request failed:", err?.message ?? String(err));
+    console.error("[Polymarket balance] Request failed:", errorToRedactedLogString(err));
     return null;
   }
 }
@@ -371,7 +371,7 @@ export async function placeOrder({ tokenId, side, size, price, tickSize = "0.01"
     };
   } catch (err) {
     if (CONFIG.trading.debugLiveTrading) {
-      console.error("[LiveTrade] CLOB order error", err);
+      console.error("[LiveTrade] CLOB order error", errorToRedactedLogString(err));
     }
     appendApiLog({
       ts: new Date().toISOString(),
@@ -379,7 +379,7 @@ export async function placeOrder({ tokenId, side, size, price, tickSize = "0.01"
       level: "error",
       request: { tokenId, side, size, price, tickSize, negRisk },
       error: {
-        message: err?.message ?? String(err),
+        message: errorToRedactedLogString(err),
         name: err?.name ?? undefined,
         code: err?.code ?? undefined,
         status: err?.status ?? err?.statusCode ?? undefined,
@@ -388,7 +388,7 @@ export async function placeOrder({ tokenId, side, size, price, tickSize = "0.01"
       }
     });
     return {
-      error: err?.message ?? String(err)
+      error: errorToRedactedLogString(err)
     };
   }
 }
@@ -470,7 +470,7 @@ export async function placeMarketOrder({ tokenId, side, amountUsd, worstPrice, t
     };
   } catch (err) {
     if (CONFIG.trading.debugLiveTrading) {
-      console.error("[LiveTrade] CLOB MARKET order error", err);
+      console.error("[LiveTrade] CLOB MARKET order error", errorToRedactedLogString(err));
     }
     appendApiLog({
       ts: new Date().toISOString(),
@@ -478,7 +478,7 @@ export async function placeMarketOrder({ tokenId, side, amountUsd, worstPrice, t
       level: "error",
       request: { tokenId, side, amountUsd, worstPrice, tickSize, negRisk },
       error: {
-        message: err?.message ?? String(err),
+        message: errorToRedactedLogString(err),
         name: err?.name ?? undefined,
         code: err?.code ?? undefined,
         status: err?.status ?? err?.statusCode ?? undefined,
@@ -487,7 +487,7 @@ export async function placeMarketOrder({ tokenId, side, amountUsd, worstPrice, t
       }
     });
     return {
-      error: err?.message ?? String(err)
+      error: errorToRedactedLogString(err)
     };
   }
 }

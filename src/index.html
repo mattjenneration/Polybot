@@ -417,18 +417,25 @@
         const ladderStr = ladder.length
           ? ladder.map((x) => `${x.threshold}+→${x.maxPrice}`).join(", ")
           : "(none — uses MAX_BID_PRICE only)";
+        const effTh = tr.effectiveTradeThreshold ?? tr.tradeThreshold;
+        const minEdge = tr.liveMinModelEdge != null ? Number(tr.liveMinModelEdge).toFixed(2) : "—";
         $("d-cfg").innerHTML = [
           `<li><span class="text-slate-500">LIVE</span> ${tr.enableLiveTrading ? "on" : "off"}</li>`,
-          `<li>TRADE_THRESHOLD ≥ ${tr.tradeThreshold} · timing ≤ ${tr.tradeTimingSeconds}s · cooldown ${tr.cooldownMinutes}m</li>`,
+          `<li>|confidence| ≥ ${effTh} (base ${tr.tradeThreshold}${tr.downSideExtraThreshold ? ` + DOWN +${tr.downSideExtraThreshold}` : ""}) · model edge ≥ ${minEdge}</li>`,
+          `<li>timing ≤ ${tr.tradeTimingSeconds}s · cooldown ${tr.cooldownMinutes}m</li>`,
           `<li>POSITION_SIZE_USD $${tr.positionSizeUsd} · max bid ${tr.maxBidPrice}</li>`,
           `<li>Ladder ${ladderStr}</li>`,
-          `<li>Budget ${fmtUsd(tr.balanceUsd)}</li>`
+          `<li>Budget ${fmtUsd(tr.balanceUsd)}</li>`,
+          tr.circuitBreakerActive
+            ? `<li class="text-amber-400">Circuit breaker: pause ~${(tr.circuitBreakerRemainingMin ?? 0).toFixed(1)}m left</li>`
+            : ""
         ].join("");
 
         const arm = tr.wouldAttemptAutoBid;
+        const block = tr.liveTradeBlockReason && tr.liveTradeBlockReason !== "ok" ? tr.liveTradeBlockReason : "";
         $("d-arm").innerHTML = arm
-          ? '<span class="text-emerald-400">Conditions met — bot would fire on this tick (if LIVE and liquidity allow).</span>'
-          : '<span class="text-slate-500">Not arming: threshold, timing, cooldown, or market state blocks auto-bid.</span>';
+          ? '<span class="text-emerald-400">All guards passed — bot would fire on this tick (if LIVE and liquidity allow).</span>'
+          : `<span class="text-slate-500">Not arming${block ? `: <code class="text-slate-400">${block}</code>` : ""}.</span>`;
       } catch (e) {
         console.error(e);
       }

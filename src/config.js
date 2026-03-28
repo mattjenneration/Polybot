@@ -82,6 +82,38 @@ export const CONFIG = {
     })(),
     // Entry timing for live orders: place trade when remaining seconds is <= this value.
     tradeTimingSeconds: Math.max(0, Number(process.env.TRADE_TIMING_SECONDS ?? "60")),
+    // Minimum model − market edge on the traded side (0–1). Stricter than display-only `decide()` in quiet regimes.
+    liveMinModelEdge: Math.max(0, Math.min(0.5, Number(process.env.LIVE_MIN_MODEL_EDGE ?? "0.10"))),
+    // Skip live bids when the ask is in this band (market is pricing ~50/50).
+    coinFlipMinPrice: (() => {
+      const a = Math.max(0.01, Math.min(0.99, Number(process.env.COIN_FLIP_MIN_PRICE ?? "0.42")));
+      const b = Math.max(0.01, Math.min(0.99, Number(process.env.COIN_FLIP_MAX_PRICE ?? "0.58")));
+      return Math.min(a, b);
+    })(),
+    coinFlipMaxPrice: (() => {
+      const a = Math.max(0.01, Math.min(0.99, Number(process.env.COIN_FLIP_MIN_PRICE ?? "0.42")));
+      const b = Math.max(0.01, Math.min(0.99, Number(process.env.COIN_FLIP_MAX_PRICE ?? "0.58")));
+      return Math.max(a, b);
+    })(),
+    // Extra |confidence| required for DOWN live trades (logs showed weaker DOWN fills).
+    downSideExtraThreshold: Math.max(0, Math.min(40, Number(process.env.DOWN_SIDE_EXTRA_THRESHOLD ?? "12"))),
+    // Mean |Δconfidence| over chopWindowMs; above this → skip (whipsaw).
+    maxConfidenceSwingMeanAbs: Math.max(0, Math.min(100, Number(process.env.MAX_CONFIDENCE_SWING_MEAN_ABS ?? "22"))),
+    chopWindowMs: Math.max(5_000, Math.min(120_000, Number(process.env.CHOP_WINDOW_MS ?? "30000"))),
+    // After this many live fills, if win rate < min, pause new bids for pauseMinutes.
+    circuitBreakerWindow: Math.max(3, Math.min(30, Number(process.env.CIRCUIT_BREAKER_WINDOW ?? "8"))),
+    circuitBreakerMinTrades: Math.max(2, Math.min(25, Number(process.env.CIRCUIT_BREAKER_MIN_TRADES ?? "6"))),
+    circuitBreakerMinWinRate: Math.max(0, Math.min(1, Number(process.env.CIRCUIT_BREAKER_MIN_WIN_RATE ?? "0.45"))),
+    circuitBreakerPauseMinutes: Math.max(1, Math.min(240, Number(process.env.CIRCUIT_BREAKER_PAUSE_MINUTES ?? "45"))),
+    circuitBreakerEnabled: (process.env.CIRCUIT_BREAKER_ENABLED ?? "true").toLowerCase() !== "false",
+    // Throttle high-volume CSV logs (signals + gpt_indicators).
+    logSignalsThrottleMs: Math.max(0, Number(process.env.LOG_SIGNALS_THROTTLE_MS ?? "30000")),
+    // Fewer terminal lines (keeps confidence, market, budget, key hints).
+    quietConsole: (process.env.QUIET_CONSOLE ?? "false").toLowerCase() === "true",
+    // Require `decide()` ENTER + same side as confidence (anti–coin-flip discipline).
+    requireEdgeEngineEnter: (process.env.REQUIRE_EDGE_ENGINE_ENTER ?? "true").toLowerCase() !== "false",
+    enforceCoinFlipGuard: (process.env.ENFORCE_COIN_FLIP_GUARD ?? "true").toLowerCase() !== "false",
+    enforceChopGuard: (process.env.ENFORCE_CHOP_GUARD ?? "true").toLowerCase() !== "false",
     // Checkpoints (seconds remaining) for recording model prediction outcomes.
     predictionCheckpointsSeconds: (() => {
       const raw = String(process.env.PREDICTION_TIMINGS_SECONDS ?? "120,90,60");

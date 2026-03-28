@@ -1,5 +1,10 @@
 import "dotenv/config";
 import { CONFIG } from "./config.js";
+import { errorToRedactedLogString } from "./logRedact.js";
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[btc-assistant] Unhandled rejection:", errorToRedactedLogString(reason));
+});
 import { fetchKlines, fetchLastPrice } from "./data/binance.js";
 import { fetchBinanceFuturesSnapshot } from "./data/binanceFutures.js";
 import { fetchChainlinkBtcUsd } from "./data/chainlink.js";
@@ -25,6 +30,7 @@ import { generateConfidenceScore } from "./engines/confidence.js";
 import { appendCsvRow, formatNumber, formatPct, getCandleWindowTiming, sleep } from "./utils.js";
 import { startBinanceTradeStream } from "./data/binanceWs.js";
 import { executeTradeIfEnabled, getUsdcBalanceUsd } from "./trading/polymarketTrade.js";
+import { evaluateLiveTradeGuards } from "./trading/liveTradeGuards.js";
 import { getAccountInfo } from "./trading/polymarketRelayerClient.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -159,6 +165,9 @@ const simulatedTradesBySlug = {};
 let simulatedBudget = CONFIG.trading.simBudgetUsd ?? 0;
 let simulatedPnl = 0;
 const confidenceHistoryBySlug = {};
+const recentLiveTradeResults = [];
+let circuitBreakerUntilMs = 0;
+let lastSignalsLogMs = 0;
 
 function maybeSimulateBestEffortTrade({
   marketSlug,
@@ -667,6 +676,25 @@ function flushBidDecisionOutcomes({ marketSlug, resolvedAtMs, priceToBeat, final
     } catch {
       // ignore logging errors
     }
+
+    if (
+      CONFIG.trading.circuitBreakerEnabled
+      && decisionType === "made"
+      && (outcome === "WIN" || outcome === "LOSS")
+    ) {
+      recentLiveTradeResults.push(outcome === "WIN");
+      while (recentLiveTradeResults.length > CONFIG.trading.circuitBreakerWindow) {
+        recentLiveTradeResults.shift();
+      }
+      if (recentLiveTradeResults.length >= CONFIG.trading.circuitBreakerMinTrades) {
+        const wins = recentLiveTradeResults.filter(Boolean).length;
+        const rate = wins / recentLiveTradeResults.length;
+        if (rate < CONFIG.trading.circuitBreakerMinWinRate) {
+          const pauseMs = CONFIG.trading.circuitBreakerPauseMinutes * 60_000;
+          circuitBreakerUntilMs = Math.max(circuitBreakerUntilMs, resolvedAtMs + pauseMs);
+        }
+      }
+    }
   }
 
   delete bidDecisionQueueBySlug[marketSlug];
@@ -1022,7 +1050,7 @@ async function main() {
           direction: confidence.direction,
           timeLeftMin
         });
-        confidenceHistoryBySlug[marketSlug] = history.slice(0, 12);
+        confidenceHistoryBySlug[marketSlug] = history.slice(0, 40);
         recordDecisionTelemetry({
           marketSlug,
           confidenceScore: confidence.score,
@@ -1290,6 +1318,80 @@ async function main() {
         );
       }
 
+      const liveTradeSide = confidence.score > 0 ? "UP" : confidence.score < 0 ? "DOWN" : null;
+      const liveAbsConfidence = Math.abs(confidence.score);
+      const liveEffThreshold =
+        CONFIG.trading.tradeThreshold + (liveTradeSide === "DOWN" ? CONFIG.trading.downSideExtraThreshold : 0);
+      const liveTimeLeftSecFull =
+        timeLeftMin !== null && Number.isFinite(Number(timeLeftMin)) ? Number(timeLeftMin) * 60 : null;
+      const eligibilityNow = Date.now();
+      const liveMinsSince = lastRealTradeAtMs === 0 ? Infinity : (eligibilityNow - lastRealTradeAtMs) / 60_000;
+      const liveInCooldown = liveMinsSince < CONFIG.trading.cooldownMinutes;
+      const circuitPaused = CONFIG.trading.circuitBreakerEnabled && eligibilityNow < circuitBreakerUntilMs;
+
+      const baseLiveEligible =
+        CONFIG.trading.enableLiveTrading &&
+        !liveInCooldown &&
+        !circuitPaused &&
+        liveTradeSide !== null &&
+        liveAbsConfidence >= liveEffThreshold &&
+        liveTimeLeftSecFull !== null &&
+        liveTimeLeftSecFull <= CONFIG.trading.tradeTimingSeconds &&
+        liveTimeLeftSecFull >= 0 &&
+        poly.ok;
+
+      let liveGuardResult = { ok: true };
+      if (baseLiveEligible && marketSlug) {
+        liveGuardResult = evaluateLiveTradeGuards({
+          rec,
+          edge,
+          tradeSide: liveTradeSide,
+          marketUp,
+          marketDown,
+          orderbook: poly.orderbook,
+          liveMinModelEdge: CONFIG.trading.liveMinModelEdge,
+          coinFlipMinPrice: CONFIG.trading.coinFlipMinPrice,
+          coinFlipMaxPrice: CONFIG.trading.coinFlipMaxPrice,
+          maxConfidenceSwingMeanAbs: CONFIG.trading.maxConfidenceSwingMeanAbs,
+          confidenceHistory: confidenceHistoryBySlug[marketSlug] ?? [],
+          nowMs: eligibilityNow,
+          chopWindowMs: CONFIG.trading.chopWindowMs,
+          confidenceScore: confidence.score,
+          requireEdgeAlignment: CONFIG.trading.requireEdgeEngineEnter,
+          enforceCoinFlipGuard: CONFIG.trading.enforceCoinFlipGuard,
+          enforceChopGuard: CONFIG.trading.enforceChopGuard
+        });
+      } else if (baseLiveEligible && !marketSlug) {
+        liveGuardResult = { ok: false, reason: "missing_market_slug" };
+      }
+
+      const shouldAttemptRealTrade = baseLiveEligible && liveGuardResult.ok;
+
+      let liveTradeBlockReason = "ok";
+      if (!CONFIG.trading.enableLiveTrading) liveTradeBlockReason = "live_disabled";
+      else if (liveInCooldown) liveTradeBlockReason = "cooldown";
+      else if (circuitPaused) liveTradeBlockReason = "circuit_breaker";
+      else if (liveTradeSide === null) liveTradeBlockReason = "flat_confidence";
+      else if (liveAbsConfidence < liveEffThreshold) liveTradeBlockReason = "below_effective_threshold";
+      else if (
+        liveTimeLeftSecFull === null
+        || liveTimeLeftSecFull > CONFIG.trading.tradeTimingSeconds
+        || liveTimeLeftSecFull < 0
+      ) {
+        liveTradeBlockReason = "outside_timing_window";
+      } else if (!poly.ok) liveTradeBlockReason = "bad_market";
+      else if (!liveGuardResult.ok) liveTradeBlockReason = liveGuardResult.reason;
+
+      const liveBidLine = kv(
+        "Live arm:",
+        CONFIG.trading.enableLiveTrading
+          ? shouldAttemptRealTrade
+            ? `${ANSI.green}YES${ANSI.reset} ${liveTradeSide ?? ""} |conf|≥${liveEffThreshold} edge+filters`
+            : `${ANSI.gray}no${ANSI.reset} (${liveTradeBlockReason})`
+          : `${ANSI.gray}off${ANSI.reset}`
+      );
+
+      const quiet = CONFIG.trading.quietConsole;
       const lines = [
         titleLine,
         marketLine,
@@ -1300,17 +1402,21 @@ async function main() {
         kv("TA Predict:", predictValue),
         confidenceLine,
         gptLine,
-        gptBreakdownLine,
-        gptTrendLine,
+        ...(quiet ? [] : [gptBreakdownLine, gptTrendLine]),
         budgetLine,
-        success120Row,
-        success90Row,
-        success60Row,
-        kv("Heiken Ashi:", heikenLine.split(": ")[1] ?? heikenLine),
-        kv("RSI:", rsiLine.split(": ")[1] ?? rsiLine),
-        kv("MACD:", macdLine.split(": ")[1] ?? macdLine),
-        kv("Delta 1/3:", deltaLine.split(": ")[1] ?? deltaLine),
-        kv("VWAP:", vwapLine.split(": ")[1] ?? vwapLine),
+        liveBidLine,
+        ...(quiet
+          ? []
+          : [
+              success120Row,
+              success90Row,
+              success60Row,
+              kv("Heiken Ashi:", heikenLine.split(": ")[1] ?? heikenLine),
+              kv("RSI:", rsiLine.split(": ")[1] ?? rsiLine),
+              kv("MACD:", macdLine.split(": ")[1] ?? macdLine),
+              kv("Delta 1/3:", deltaLine.split(": ")[1] ?? deltaLine),
+              kv("VWAP:", vwapLine.split(": ")[1] ?? vwapLine)
+            ]),
         "",
         sepLine(),
         "",
@@ -1333,11 +1439,6 @@ async function main() {
       ].filter((x) => x !== null);
 
       try {
-        const dashNow = Date.now();
-        const dashMinsSince = lastRealTradeAtMs === 0 ? Infinity : (dashNow - lastRealTradeAtMs) / 60_000;
-        const dashInCooldown = dashMinsSince < CONFIG.trading.cooldownMinutes;
-        const dashTimeLeftSec =
-          timeLeftMin !== null && Number.isFinite(Number(timeLeftMin)) ? Number(timeLeftMin) * 60 : null;
         const snapshot = {
           updatedAt: new Date().toISOString(),
           market: {
@@ -1363,28 +1464,32 @@ async function main() {
             gptDirection: gptIndicators.direction,
             gptScore: gptIndicators.score,
             gptConfidencePct: gptIndicators.confidence,
-            regime: regimeInfo.regime
+            regime: regimeInfo.regime,
+            edgeUp: edge.edgeUp,
+            edgeDown: edge.edgeDown
           },
           trading: {
             enableLiveTrading: CONFIG.trading.enableLiveTrading,
             tradeThreshold: CONFIG.trading.tradeThreshold,
+            effectiveTradeThreshold: liveEffThreshold,
+            downSideExtraThreshold: CONFIG.trading.downSideExtraThreshold,
+            liveMinModelEdge: CONFIG.trading.liveMinModelEdge,
             positionSizeUsd: CONFIG.trading.positionSizeUsd,
             cooldownMinutes: CONFIG.trading.cooldownMinutes,
             tradeTimingSeconds: CONFIG.trading.tradeTimingSeconds,
             maxBidPrice: CONFIG.trading.maxBidPrice,
             confidenceMaxBidLadder: CONFIG.trading.confidenceMaxBidLadder ?? [],
-            inCooldown: dashInCooldown,
+            inCooldown: liveInCooldown,
             cooldownRemainingMin:
-              dashInCooldown && Number.isFinite(dashMinsSince)
-                ? Math.max(0, CONFIG.trading.cooldownMinutes - dashMinsSince)
+              liveInCooldown && Number.isFinite(liveMinsSince)
+                ? Math.max(0, CONFIG.trading.cooldownMinutes - liveMinsSince)
                 : null,
-            wouldAttemptAutoBid:
-              !dashInCooldown &&
-              Math.abs(confidence.score) >= CONFIG.trading.tradeThreshold &&
-              dashTimeLeftSec !== null &&
-              dashTimeLeftSec <= CONFIG.trading.tradeTimingSeconds &&
-              dashTimeLeftSec >= 0 &&
-              poly.ok,
+            circuitBreakerActive: circuitPaused,
+            circuitBreakerRemainingMin: circuitPaused
+              ? Math.max(0, (circuitBreakerUntilMs - eligibilityNow) / 60_000)
+              : null,
+            wouldAttemptAutoBid: shouldAttemptRealTrade,
+            liveTradeBlockReason,
             balanceUsd: CONFIG.trading.enableLiveTrading ? accountBalanceUsd : simulatedBudget,
             simulatedPnlUsd: CONFIG.trading.enableLiveTrading ? null : simulatedPnl
           },
@@ -1402,41 +1507,29 @@ async function main() {
       renderScreen(lines.join("\n") + "\n");
 
       const nowMs = Date.now();
-      const minutesSinceLastTrade = lastRealTradeAtMs === 0 ? Infinity : (nowMs - lastRealTradeAtMs) / 60_000;
-      const inCooldown = minutesSinceLastTrade < CONFIG.trading.cooldownMinutes;
-      const timeLeftSec = timeLeftMin !== null && Number.isFinite(Number(timeLeftMin)) ? Number(timeLeftMin) * 60 : null;
-
-      const absConfidence = Math.abs(confidence.score);
-      const shouldAttemptRealTrade = !inCooldown
-        && absConfidence >= CONFIG.trading.tradeThreshold
-        && timeLeftSec !== null
-        && timeLeftSec <= CONFIG.trading.tradeTimingSeconds
-        && timeLeftSec >= 0
-        && poly.ok;
 
       if (shouldAttemptRealTrade) {
-        const tradeSide = confidence.score > 0 ? "UP" : "DOWN";
         const result = await executeTradeIfEnabled({
-          side: tradeSide,
+          side: liveTradeSide,
           amountUsd: CONFIG.trading.positionSizeUsd,
           marketSnapshot: poly,
           confidenceScore: confidence.score
         });
         queueBidDecision({
           marketSlug,
-          side: tradeSide,
+          side: liveTradeSide,
           confidenceScore: confidence.score,
           taPredictScore,
           status: result.status,
           reason: result.reason ?? result.errorMessage ?? "",
           amountUsd: CONFIG.trading.positionSizeUsd,
           orderId: result.orderId ?? "",
-          tokenId: tradeSide === "UP" ? poly.tokens?.upTokenId ?? "" : poly.tokens?.downTokenId ?? "",
+          tokenId: liveTradeSide === "UP" ? poly.tokens?.upTokenId ?? "" : poly.tokens?.downTokenId ?? "",
           nowIso: new Date().toISOString()
         });
 
         if (result.status === "ok") {
-          console.log(`Live trade executed: ${tradeSide} $${CONFIG.trading.positionSizeUsd.toFixed(2)} (confidence ${confidence.score.toFixed(0)}) orderId=${result.orderId ?? "-"} `);
+          console.log(`Live trade executed: ${liveTradeSide} $${CONFIG.trading.positionSizeUsd.toFixed(2)} (confidence ${confidence.score.toFixed(0)}) orderId=${result.orderId ?? "-"} `);
         } else {
           const reasonStr = result.reason ?? result.errorMessage ?? "";
           const addrStr = result.reason === "insufficient_usdc" && result.walletAddress
@@ -1444,7 +1537,6 @@ async function main() {
             : "";
           console.log(`Trade skipped: ${result.status} (${reasonStr}${addrStr})`);
         }
-        // Cooldown after any attempt (success or failure) so we don't retry every poll in the same window
         lastRealTradeAtMs = nowMs;
       }
 
@@ -1468,59 +1560,67 @@ async function main() {
       prevSpotPrice = spotPrice ?? prevSpotPrice;
       prevCurrentPrice = currentPrice ?? prevCurrentPrice;
 
-      appendCsvRow("./logs/signals.csv", header, [
-        new Date().toISOString(),
-        timing.elapsedMinutes.toFixed(3),
-        timeLeftMin.toFixed(3),
-        regimeInfo.regime,
-        signal,
-        timeAware.adjustedUp,
-        timeAware.adjustedDown,
-        marketUp,
-        marketDown,
-        edge.edgeUp,
-        edge.edgeDown,
-        rec.action === "ENTER" ? `${rec.side}:${rec.phase}:${rec.strength}` : "NO_TRADE"
-      ]);
+      const logSignalsNow =
+        CONFIG.trading.logSignalsThrottleMs <= 0
+        || Date.now() - lastSignalsLogMs >= CONFIG.trading.logSignalsThrottleMs
+        || shouldAttemptRealTrade;
 
-      const fundingIndicator = gptIndicators.byName.funding;
-      const openInterestIndicator = gptIndicators.byName.open_interest;
-      const longShortIndicator = gptIndicators.byName.long_short;
-      const basisIndicator = gptIndicators.byName.basis;
-      const polymarketMicroIndicator = gptIndicators.byName.polymarket_micro;
+      if (logSignalsNow) {
+        lastSignalsLogMs = Date.now();
+        appendCsvRow("./logs/signals.csv", header, [
+          new Date().toISOString(),
+          timing.elapsedMinutes.toFixed(3),
+          timeLeftMin.toFixed(3),
+          regimeInfo.regime,
+          signal,
+          timeAware.adjustedUp,
+          timeAware.adjustedDown,
+          marketUp,
+          marketDown,
+          edge.edgeUp,
+          edge.edgeDown,
+          rec.action === "ENTER" ? `${rec.side}:${rec.phase}:${rec.strength}` : "NO_TRADE"
+        ]);
 
-      appendCsvRow("./logs/gpt_indicators.csv", gptIndicatorLogHeader, [
-        new Date().toISOString(),
-        marketSlug || "",
-        timeLeftMin.toFixed(3),
-        confidence.score.toFixed(2),
-        confidence.direction,
-        confidence.taScore?.toFixed(2) ?? "",
-        gptIndicators.score.toFixed(2),
-        gptIndicators.direction,
-        gptIndicators.confidence,
-        fundingIndicator?.score ?? "",
-        fundingIndicator?.confidence ?? "",
-        fundingIndicator?.value ?? "",
-        openInterestIndicator?.score ?? "",
-        openInterestIndicator?.confidence ?? "",
-        openInterestIndicator?.value ?? "",
-        longShortIndicator?.score ?? "",
-        longShortIndicator?.confidence ?? "",
-        longShortIndicator?.value ?? "",
-        basisIndicator?.score ?? "",
-        basisIndicator?.confidence ?? "",
-        basisIndicator?.value ?? "",
-        polymarketMicroIndicator?.score ?? "",
-        polymarketMicroIndicator?.confidence ?? "",
-        futuresSnapshot?.basisPct ?? "",
-        futuresSnapshot?.fundingRate ?? "",
-        futuresSnapshot?.openInterestDeltaPct ?? "",
-        futuresSnapshot?.longShortRatio ?? ""
-      ]);
+        const fundingIndicator = gptIndicators.byName.funding;
+        const openInterestIndicator = gptIndicators.byName.open_interest;
+        const longShortIndicator = gptIndicators.byName.long_short;
+        const basisIndicator = gptIndicators.byName.basis;
+        const polymarketMicroIndicator = gptIndicators.byName.polymarket_micro;
+
+        appendCsvRow("./logs/gpt_indicators.csv", gptIndicatorLogHeader, [
+          new Date().toISOString(),
+          marketSlug || "",
+          timeLeftMin.toFixed(3),
+          confidence.score.toFixed(2),
+          confidence.direction,
+          confidence.taScore?.toFixed(2) ?? "",
+          gptIndicators.score.toFixed(2),
+          gptIndicators.direction,
+          gptIndicators.confidence,
+          fundingIndicator?.score ?? "",
+          fundingIndicator?.confidence ?? "",
+          fundingIndicator?.value ?? "",
+          openInterestIndicator?.score ?? "",
+          openInterestIndicator?.confidence ?? "",
+          openInterestIndicator?.value ?? "",
+          longShortIndicator?.score ?? "",
+          longShortIndicator?.confidence ?? "",
+          longShortIndicator?.value ?? "",
+          basisIndicator?.score ?? "",
+          basisIndicator?.confidence ?? "",
+          basisIndicator?.value ?? "",
+          polymarketMicroIndicator?.score ?? "",
+          polymarketMicroIndicator?.confidence ?? "",
+          futuresSnapshot?.basisPct ?? "",
+          futuresSnapshot?.fundingRate ?? "",
+          futuresSnapshot?.openInterestDeltaPct ?? "",
+          futuresSnapshot?.longShortRatio ?? ""
+        ]);
+      }
     } catch (err) {
       console.log("────────────────────────────");
-      console.log(`Error: ${err?.message ?? String(err)}`);
+      console.log(`Error: ${errorToRedactedLogString(err)}`);
       console.log("────────────────────────────");
     }
 
