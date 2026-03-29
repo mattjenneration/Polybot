@@ -4,12 +4,19 @@ import { scoreOpenInterestIndicator } from "./gptOpenInterest.js";
 import { scoreLongShortIndicator } from "./gptLongShort.js";
 import { scoreBasisIndicator } from "./gptBasis.js";
 import { scorePolymarketMicroIndicator } from "./gptPolymarketMicro.js";
+import { scorePolySwingsIndicator } from "./gptPolySwings.js";
 
 /**
- * Futures + orderbook microstructure only (no duplicate spot-vs-Polymarket edge;
+ * Futures + orderbook microstructure + rolling Polymarket bid swings (no duplicate spot-vs-Polymarket edge;
  * that lives in generateConfidenceScore TA block).
  */
-export function evaluateGptIndicators({ futuresSnapshot, polymarketSnapshot, spotDelta1m, spotDelta3m }) {
+export function evaluateGptIndicators({
+  futuresSnapshot,
+  polymarketSnapshot,
+  spotDelta1m,
+  spotDelta3m,
+  polySwingsContext
+}) {
   const signals = [
     scoreFundingIndicator({ fundingRate: futuresSnapshot?.fundingRate ?? null }),
     scoreOpenInterestIndicator({
@@ -21,7 +28,8 @@ export function evaluateGptIndicators({ futuresSnapshot, polymarketSnapshot, spo
       longShortDelta: futuresSnapshot?.longShortDelta ?? null
     }),
     scoreBasisIndicator({ basisPct: futuresSnapshot?.basisPct ?? null }),
-    scorePolymarketMicroIndicator({ polymarketSnapshot })
+    scorePolymarketMicroIndicator({ polymarketSnapshot }),
+    scorePolySwingsIndicator({ polySwingsContext })
   ];
 
   const totalScore = signals.reduce((acc, x) => acc + x.score, 0);

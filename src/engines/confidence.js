@@ -29,7 +29,8 @@ export function generateConfidenceScore({
   polymarketSnapshot,
   spotDelta1m,
   spotDelta3m,
-  futuresSnapshot = null
+  futuresSnapshot = null,
+  polySwingsContext = null
 }) {
   let score = 0;
 
@@ -110,7 +111,8 @@ export function generateConfidenceScore({
     futuresSnapshot,
     polymarketSnapshot,
     spotDelta1m,
-    spotDelta3m
+    spotDelta3m,
+    polySwingsContext
   });
 
   const auxWeight = CONFIG.confidenceAuxiliaryWeight ?? 0.22;

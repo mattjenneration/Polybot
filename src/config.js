@@ -27,7 +27,10 @@ export const CONFIG = {
     downOutcomeLabel: process.env.POLYMARKET_DOWN_LABEL || "Down",
     funderAddress: (process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLY_FUNDER_ADDRESS || "").trim(),
     // 0 = EOA, 1 = POLY_PROXY, 2 = GNOSIS_SAFE (see Polymarket docs)
-    signatureType: Number(process.env.POLY_SIGNATURE_TYPE ?? "2")
+    signatureType: Number(process.env.POLY_SIGNATURE_TYPE ?? "2"),
+    /** Rolling PolySwings sample log; same 1h window as in-memory store. Set POLYSWINGS_CSV=false to disable. */
+    polySwingsCsvEnabled: (process.env.POLYSWINGS_CSV ?? "true").toLowerCase() !== "false",
+    polySwingsCsvPath: process.env.POLYSWINGS_CSV_PATH || "./logs/polyswings_samples.csv"
   },
 
   chainlink: {

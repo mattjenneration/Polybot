@@ -51,10 +51,8 @@ export function ensureDir(dirPath) {
   fs.mkdirSync(dirPath, { recursive: true });
 }
 
-export function appendCsvRow(filePath, header, row) {
-  ensureDir(path.dirname(filePath));
-  const exists = fs.existsSync(filePath);
-  const line = row
+export function formatCsvRow(row) {
+  return row
     .map((v) => {
       if (v === null || v === undefined) return "";
       const s = String(v);
@@ -64,6 +62,12 @@ export function appendCsvRow(filePath, header, row) {
       return s;
     })
     .join(",");
+}
+
+export function appendCsvRow(filePath, header, row) {
+  ensureDir(path.dirname(filePath));
+  const exists = fs.existsSync(filePath);
+  const line = formatCsvRow(row);
 
   if (!exists) {
     fs.writeFileSync(filePath, `${header.join(",")}\n${line}\n`, "utf8");
@@ -71,4 +75,31 @@ export function appendCsvRow(filePath, header, row) {
   }
 
   fs.appendFileSync(filePath, `${line}\n`, "utf8");
+}
+
+/**
+ * Keeps only data lines whose first column is ts_ms >= cutoffMs (unquoted integer),
+ * then appends newRow. Rewrites the whole file (rolling window on disk).
+ */
+export function rewriteRollingCsvByLeadingTimestampMs(filePath, header, newRow, cutoffMs) {
+  ensureDir(path.dirname(filePath));
+  const headerLine = header.join(",");
+  const newLine = formatCsvRow(newRow);
+  const kept = [];
+  if (fs.existsSync(filePath)) {
+    try {
+      const text = fs.readFileSync(filePath, "utf8");
+      const lines = text.split(/\r?\n/).filter(Boolean);
+      if (lines.length > 0 && lines[0] === headerLine) {
+        for (let i = 1; i < lines.length; i += 1) {
+          const m = lines[i].match(/^(\d+),/);
+          const ts = m ? Number(m[1]) : NaN;
+          if (Number.isFinite(ts) && ts >= cutoffMs) kept.push(lines[i]);
+        }
+      }
+    } catch {
+      // reset below
+    }
+  }
+  fs.writeFileSync(filePath, `${headerLine}\n${[...kept, newLine].join("\n")}\n`, "utf8");
 }

@@ -165,6 +165,43 @@ export async function fetchOrderBook({ tokenId }) {
   return await res.json();
 }
 
+/**
+ * When a Gamma market is closed and resolved, returns "UP" / "DOWN" from outcome prices.
+ */
+export function parseResolvedUpDownFromGammaMarket(market, upLabel = "Up", downLabel = "Down") {
+  if (!market || !market.closed || market.umaResolutionStatus !== "resolved") return null;
+
+  let outcomes;
+  let prices;
+  try {
+    outcomes = Array.isArray(market.outcomes)
+      ? market.outcomes
+      : typeof market.outcomes === "string"
+        ? JSON.parse(market.outcomes || "[]")
+        : [];
+    prices = Array.isArray(market.outcomePrices)
+      ? market.outcomePrices
+      : typeof market.outcomePrices === "string"
+        ? JSON.parse(market.outcomePrices || "[]")
+        : [];
+  } catch {
+    return null;
+  }
+
+  let winIdx = -1;
+  for (let i = 0; i < prices.length; i += 1) {
+    if (Number(prices[i]) >= 0.5) winIdx = i;
+  }
+  if (winIdx < 0 || !outcomes[winIdx]) return null;
+
+  const label = String(outcomes[winIdx]);
+  const u = String(upLabel).toLowerCase();
+  const d = String(downLabel).toLowerCase();
+  if (label.toLowerCase() === u) return "UP";
+  if (label.toLowerCase() === d) return "DOWN";
+  return null;
+}
+
 export function summarizeOrderBook(book, depthLevels = 5) {
   const bids = Array.isArray(book?.bids) ? book.bids : [];
   const asks = Array.isArray(book?.asks) ? book.asks : [];

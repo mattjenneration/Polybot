@@ -27,6 +27,7 @@ import { detectRegime } from "./engines/regime.js";
 import { scoreDirection, applyTimeAwareness } from "./engines/probability.js";
 import { computeEdge, decide } from "./engines/edge.js";
 import { generateConfidenceScore } from "./engines/confidence.js";
+import { createPolySwingsCollector } from "./indicators/polySwingsStore.js";
 import { appendCsvRow, formatNumber, formatPct, getCandleWindowTiming, sleep } from "./utils.js";
 import { startBinanceTradeStream } from "./data/binanceWs.js";
 import { executeTradeIfEnabled, getUsdcBalanceUsd } from "./trading/polymarketTrade.js";
@@ -821,6 +822,7 @@ async function fetchPolymarketSnapshot() {
 }
 
 async function main() {
+  const polySwingsCollector = createPolySwingsCollector();
   const binanceStream = startBinanceTradeStream({ symbol: CONFIG.symbol });
   const polymarketLiveStream = startPolymarketChainlinkPriceStream({});
   const chainlinkStream = startChainlinkPriceStream({});
@@ -958,6 +960,7 @@ async function main() {
       const delta1m = lastClose !== null && close1mAgo !== null ? lastClose - close1mAgo : null;
       const delta3m = lastClose !== null && close3mAgo !== null ? lastClose - close3mAgo : null;
 
+      const polySwingsContext = polySwingsCollector.getContextForIndicator();
       const confidence = generateConfidenceScore({
         rsi: rsiNow,
         macd,
@@ -967,10 +970,21 @@ async function main() {
         polymarketSnapshot: poly,
         spotDelta1m: delta1m,
         spotDelta3m: delta3m,
-        futuresSnapshot
+        futuresSnapshot,
+        polySwingsContext
       });
 
       const gptIndicators = confidence.gptIndicators;
+
+      try {
+        await polySwingsCollector.tick({
+          poly,
+          confidence,
+          taScore: confidence.taScore
+        });
+      } catch {
+        // ignore PolySwings persistence errors (network etc.)
+      }
 
       const haNarrative = (consec.color ?? "").toLowerCase() === "green" ? "LONG" : (consec.color ?? "").toLowerCase() === "red" ? "SHORT" : "NEUTRAL";
       const rsiNarrative = narrativeFromSlope(rsiSlope);
@@ -1295,6 +1309,13 @@ async function main() {
         .map((x) => `${x.name}:${x.score >= 0 ? "+" : ""}${x.score}`)
         .join(" | ");
       const gptBreakdownLine = kv("GPT top:", topGpt || `${ANSI.gray}-${ANSI.reset}`);
+      const ps = gptIndicators.byName?.polyswings;
+      const polySwingsLine = kv(
+        "PolySwings:",
+        ps
+          ? `${ANSI.dim}${ps.summary}${ANSI.reset} (${ps.score >= 0 ? "+" : ""}${ps.score})`
+          : `${ANSI.gray}-${ANSI.reset}`
+      );
       const gptTrendLine = kv("GPT trend:", renderSignedTrend(gptConfidenceHistory, 14));
       const success120Row = renderPredictionHistoryRow("Success @120s:", predictionHistoryByCheckpoint[120] ?? []);
       const success90Row = renderPredictionHistoryRow("Success @90s:", predictionHistoryByCheckpoint[90] ?? []);
@@ -1402,6 +1423,7 @@ async function main() {
         kv("TA Predict:", predictValue),
         confidenceLine,
         gptLine,
+        polySwingsLine,
         ...(quiet ? [] : [gptBreakdownLine, gptTrendLine]),
         budgetLine,
         liveBidLine,
@@ -1464,6 +1486,20 @@ async function main() {
             gptDirection: gptIndicators.direction,
             gptScore: gptIndicators.score,
             gptConfidencePct: gptIndicators.confidence,
+            polySwings: ps
+              ? {
+                  score: ps.score,
+                  direction: ps.direction,
+                  summary: ps.summary,
+                  sampleCount: polySwingsContext?.sampleCount ?? 0,
+                  leadFlips: polySwingsContext?.leadFlips ?? 0,
+                  bidCentMoves: polySwingsContext?.bidCentMoves ?? 0,
+                  completedRounds: polySwingsContext?.completedRoundCount ?? 0,
+                  terminalAccuracy: polySwingsContext?.terminalAccuracy ?? null,
+                  meanConfidence: polySwingsContext?.meanConfidence ?? null,
+                  recentRounds: polySwingsContext?.recentRounds ?? []
+                }
+              : null,
             regime: regimeInfo.regime,
             edgeUp: edge.edgeUp,
             edgeDown: edge.edgeDown
