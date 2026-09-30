@@ -1,238 +1,147 @@
 import { CONFIG } from "../config.js";
+import { normalizeFeeSchedule } from "../core/fees.js";
+import { normalizeBook } from "../core/orderbook.js";
 
-function toNumber(x) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : null;
+async function getJson(url) {
+  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error(`${url.pathname ?? url} → HTTP ${res.status}`);
+  return res.json();
 }
 
-export async function fetchMarketBySlug(slug) {
-  const url = new URL("/markets", CONFIG.gammaBaseUrl);
+function parseMaybeJsonArray(x) {
+  if (Array.isArray(x)) return x;
+  if (typeof x === "string") {
+    try {
+      const v = JSON.parse(x);
+      return Array.isArray(v) ? v : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function timeMs(x) {
+  const t = x ? new Date(x).getTime() : NaN;
+  return Number.isFinite(t) ? t : null;
+}
+
+export const ROUND_SECONDS = 300;
+export const SLUG_PREFIX = "btc-updown-5m";
+
+/** Slug of the 5m round containing `nowMs` (slugs are keyed by the round's start in unix seconds). */
+export function slugForTime(nowMs, prefix = SLUG_PREFIX, roundSeconds = ROUND_SECONDS) {
+  const start = Math.floor(nowMs / 1000 / roundSeconds) * roundSeconds;
+  return `${prefix}-${start}`;
+}
+
+export async function fetchEventBySlug(slug) {
+  const url = new URL("/events", CONFIG.gammaBaseUrl);
   url.searchParams.set("slug", slug);
-
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Gamma markets error: ${res.status} ${await res.text()}`);
-  }
-
-  const data = await res.json();
-  const market = Array.isArray(data) ? data[0] : data;
-  if (!market) return null;
-
-  return market;
+  const data = await getJson(url);
+  const ev = Array.isArray(data) ? data[0] : data;
+  return ev ?? null;
 }
 
-export async function fetchMarketsBySeriesSlug({ seriesSlug, limit = 50 }) {
-  const url = new URL("/markets", CONFIG.gammaBaseUrl);
-  url.searchParams.set("seriesSlug", seriesSlug);
-  url.searchParams.set("active", "true");
-  url.searchParams.set("closed", "false");
-  url.searchParams.set("enableOrderBook", "true");
-  url.searchParams.set("limit", String(limit));
-
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Gamma markets(series) error: ${res.status} ${await res.text()}`);
-  }
-
-  const data = await res.json();
-  return Array.isArray(data) ? data : [];
-}
-
-export async function fetchLiveEventsBySeriesId({ seriesId, limit = 20 }) {
+export async function fetchLiveEventsBySeriesId({ seriesId, limit = 50, nowMs = Date.now() }) {
   const url = new URL("/events", CONFIG.gammaBaseUrl);
   url.searchParams.set("series_id", String(seriesId));
   url.searchParams.set("active", "true");
   url.searchParams.set("closed", "false");
+  url.searchParams.set("end_date_min", new Date(nowMs).toISOString());
+  url.searchParams.set("order", "endDate");
+  url.searchParams.set("ascending", "true");
   url.searchParams.set("limit", String(limit));
-
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Gamma events(series_id) error: ${res.status} ${await res.text()}`);
-  }
-
-  const data = await res.json();
+  const data = await getJson(url);
   return Array.isArray(data) ? data : [];
-}
-
-export function flattenEventMarkets(events) {
-  const out = [];
-  for (const e of Array.isArray(events) ? events : []) {
-    const markets = Array.isArray(e.markets) ? e.markets : [];
-    for (const m of markets) {
-      out.push(m);
-    }
-  }
-  return out;
-}
-
-export async function fetchActiveMarkets({ limit = 200, offset = 0 } = {}) {
-  const url = new URL("/markets", CONFIG.gammaBaseUrl);
-  url.searchParams.set("active", "true");
-  url.searchParams.set("closed", "false");
-  url.searchParams.set("enableOrderBook", "true");
-  url.searchParams.set("limit", String(limit));
-  url.searchParams.set("offset", String(offset));
-
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Gamma markets(active) error: ${res.status} ${await res.text()}`);
-  }
-  const data = await res.json();
-  return Array.isArray(data) ? data : [];
-}
-
-function safeTimeMs(x) {
-  if (!x) return null;
-  const t = new Date(x).getTime();
-  return Number.isFinite(t) ? t : null;
-}
-
-export function pickLatestLiveMarket(markets, nowMs = Date.now()) {
-  if (!Array.isArray(markets) || markets.length === 0) return null;
-
-  const enriched = markets
-    .map((m) => {
-      const endMs = safeTimeMs(m.endDate);
-      const startMs = safeTimeMs(m.eventStartTime ?? m.startTime ?? m.startDate);
-      return { m, endMs, startMs };
-    })
-    .filter((x) => x.endMs !== null);
-
-  const live = enriched
-    .filter((x) => {
-      const started = x.startMs === null ? true : x.startMs <= nowMs;
-      return started && nowMs < x.endMs;
-    })
-    .sort((a, b) => a.endMs - b.endMs);
-
-  if (live.length) return live[0].m;
-
-  const upcoming = enriched
-    .filter((x) => nowMs < x.endMs)
-    .sort((a, b) => a.endMs - b.endMs);
-
-  return upcoming.length ? upcoming[0].m : null;
-}
-
-function marketHasSeriesSlug(market, seriesSlug) {
-  if (!market || !seriesSlug) return false;
-
-  const events = Array.isArray(market.events) ? market.events : [];
-  for (const e of events) {
-    const series = Array.isArray(e.series) ? e.series : [];
-    for (const s of series) {
-      if (String(s.slug ?? "").toLowerCase() === String(seriesSlug).toLowerCase()) return true;
-    }
-    if (String(e.seriesSlug ?? "").toLowerCase() === String(seriesSlug).toLowerCase()) return true;
-  }
-  if (String(market.seriesSlug ?? "").toLowerCase() === String(seriesSlug).toLowerCase()) return true;
-  return false;
-}
-
-export function filterBtcUpDown15mMarkets(markets, { seriesSlug, slugPrefix } = {}) {
-  const prefix = (slugPrefix ?? "").toLowerCase();
-  const wantedSeries = (seriesSlug ?? "").toLowerCase();
-
-  return (Array.isArray(markets) ? markets : []).filter((m) => {
-    const slug = String(m.slug ?? "").toLowerCase();
-    const matchesPrefix = prefix ? slug.startsWith(prefix) : false;
-    const matchesSeries = wantedSeries ? marketHasSeriesSlug(m, wantedSeries) : false;
-    return matchesPrefix || matchesSeries;
-  });
-}
-
-export async function fetchClobPrice({ tokenId, side }) {
-  const url = new URL("/price", CONFIG.clobBaseUrl);
-  url.searchParams.set("token_id", tokenId);
-  url.searchParams.set("side", side);
-
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`CLOB price error: ${res.status} ${await res.text()}`);
-  }
-  const data = await res.json();
-  return toNumber(data.price);
-}
-
-export async function fetchOrderBook({ tokenId }) {
-  const url = new URL("/book", CONFIG.clobBaseUrl);
-  url.searchParams.set("token_id", tokenId);
-
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`CLOB book error: ${res.status} ${await res.text()}`);
-  }
-  return await res.json();
 }
 
 /**
- * When a Gamma market is closed and resolved, returns "UP" / "DOWN" from outcome prices.
+ * Convert a Gamma market into the round descriptor the engine uses.
+ * Returns null when token ids for both outcomes can't be found.
  */
-export function parseResolvedUpDownFromGammaMarket(market, upLabel = "Up", downLabel = "Down") {
-  if (!market || !market.closed || market.umaResolutionStatus !== "resolved") return null;
-
-  let outcomes;
-  let prices;
-  try {
-    outcomes = Array.isArray(market.outcomes)
-      ? market.outcomes
-      : typeof market.outcomes === "string"
-        ? JSON.parse(market.outcomes || "[]")
-        : [];
-    prices = Array.isArray(market.outcomePrices)
-      ? market.outcomePrices
-      : typeof market.outcomePrices === "string"
-        ? JSON.parse(market.outcomePrices || "[]")
-        : [];
-  } catch {
-    return null;
-  }
-
-  let winIdx = -1;
-  for (let i = 0; i < prices.length; i += 1) {
-    if (Number(prices[i]) >= 0.5) winIdx = i;
-  }
-  if (winIdx < 0 || !outcomes[winIdx]) return null;
-
-  const label = String(outcomes[winIdx]);
-  const u = String(upLabel).toLowerCase();
-  const d = String(downLabel).toLowerCase();
-  if (label.toLowerCase() === u) return "UP";
-  if (label.toLowerCase() === d) return "DOWN";
-  return null;
+export function roundFromMarket(market, { upLabel = CONFIG.polymarket.upOutcomeLabel, downLabel = CONFIG.polymarket.downOutcomeLabel } = {}) {
+  if (!market) return null;
+  const outcomes = parseMaybeJsonArray(market.outcomes).map((o) => String(o).toLowerCase());
+  const tokens = parseMaybeJsonArray(market.clobTokenIds).map(String);
+  const upIdx = outcomes.indexOf(upLabel.toLowerCase());
+  const downIdx = outcomes.indexOf(downLabel.toLowerCase());
+  if (upIdx < 0 || downIdx < 0 || !tokens[upIdx] || !tokens[downIdx]) return null;
+  const endMs = timeMs(market.endDate);
+  const startMs = timeMs(market.eventStartTime) ?? (endMs ? endMs - ROUND_SECONDS * 1000 : null);
+  if (!startMs || !endMs) return null;
+  const minSize = Number(market.orderMinSize);
+  const tick = Number(market.orderPriceMinTickSize);
+  return {
+    slug: String(market.slug),
+    question: String(market.question ?? ""),
+    startMs,
+    endMs,
+    upTokenId: tokens[upIdx],
+    downTokenId: tokens[downIdx],
+    feeSchedule: normalizeFeeSchedule(market.feeSchedule),
+    minOrderSize: Number.isFinite(minSize) && minSize > 0 ? minSize : 5,
+    tickSize: Number.isFinite(tick) && tick > 0 ? tick : 0.01,
+    negRisk: Boolean(market.negRisk)
+  };
 }
 
-export function summarizeOrderBook(book, depthLevels = 5) {
-  const bids = Array.isArray(book?.bids) ? book.bids : [];
-  const asks = Array.isArray(book?.asks) ? book.asks : [];
+/** Find the round live at `nowMs`: try the deterministic slug first, then search the series. */
+export async function fetchCurrentRound(nowMs = Date.now()) {
+  if (CONFIG.polymarket.marketSlug) {
+    const ev = await fetchEventBySlug(CONFIG.polymarket.marketSlug);
+    return roundFromMarket(ev?.markets?.[0]);
+  }
+  try {
+    const ev = await fetchEventBySlug(slugForTime(nowMs));
+    const r = roundFromMarket(ev?.markets?.[0]);
+    if (r && r.startMs <= nowMs && nowMs < r.endMs) return r;
+  } catch {
+    // fall through to series search
+  }
+  if (!CONFIG.polymarket.autoSelectLatest) return null;
+  const events = await fetchLiveEventsBySeriesId({ seriesId: CONFIG.polymarket.seriesId, nowMs });
+  const rounds = events
+    .flatMap((e) => (Array.isArray(e.markets) ? e.markets : []))
+    .map((m) => roundFromMarket(m))
+    .filter((r) => r && r.startMs <= nowMs && nowMs < r.endMs)
+    .sort((a, b) => a.endMs - b.endMs);
+  return rounds[0] ?? null;
+}
 
-  const bestBid = bids.length
-    ? bids.reduce((best, lvl) => {
-        const p = toNumber(lvl.price);
-        if (p === null) return best;
-        if (best === null) return p;
-        return Math.max(best, p);
-      }, null)
-    : null;
+export async function fetchOrderBook(tokenId, depth = 10) {
+  const url = new URL("/book", CONFIG.clobBaseUrl);
+  url.searchParams.set("token_id", tokenId);
+  return normalizeBook(await getJson(url), depth);
+}
 
-  const bestAsk = asks.length
-    ? asks.reduce((best, lvl) => {
-        const p = toNumber(lvl.price);
-        if (p === null) return best;
-        if (best === null) return p;
-        return Math.min(best, p);
-      }, null)
-    : null;
-  const spread = bestBid !== null && bestAsk !== null ? bestAsk - bestBid : null;
-
-  const bidLiquidity = bids.slice(0, depthLevels).reduce((acc, x) => acc + (toNumber(x.size) ?? 0), 0);
-  const askLiquidity = asks.slice(0, depthLevels).reduce((acc, x) => acc + (toNumber(x.size) ?? 0), 0);
-
+/**
+ * Parse the official outcome of a closed round from its Gamma event.
+ * @returns {{ status: "resolved", outcome: "UP"|"DOWN", ptb: number|null, final: number|null } | { status: "pending" }}
+ */
+export function parseResolution(event, { upLabel = CONFIG.polymarket.upOutcomeLabel, downLabel = CONFIG.polymarket.downOutcomeLabel } = {}) {
+  const market = event?.markets?.[0];
+  if (!market || !market.closed) return { status: "pending" };
+  const outcomes = parseMaybeJsonArray(market.outcomes).map((o) => String(o).toLowerCase());
+  const prices = parseMaybeJsonArray(market.outcomePrices).map(Number);
+  const winIdx = prices.findIndex((p) => p >= 0.99);
+  if (winIdx < 0 || !outcomes[winIdx]) return { status: "pending" };
+  const label = outcomes[winIdx];
+  const outcome = label === upLabel.toLowerCase() ? "UP" : label === downLabel.toLowerCase() ? "DOWN" : null;
+  if (!outcome) return { status: "pending" };
+  const meta = event.eventMetadata ?? {};
+  const ptb = Number(meta.priceToBeat);
+  const final = Number(meta.finalPrice);
   return {
-    bestBid,
-    bestAsk,
-    spread,
-    bidLiquidity,
-    askLiquidity
+    status: "resolved",
+    outcome,
+    ptb: Number.isFinite(ptb) ? ptb : null,
+    final: Number.isFinite(final) ? final : null
   };
+}
+
+export async function fetchResolution(slug) {
+  const ev = await fetchEventBySlug(slug);
+  if (!ev) return { status: "pending" };
+  return parseResolution(ev);
 }

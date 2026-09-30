@@ -3,834 +3,235 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>BTC 5m Assistant | Dashboard</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <title>BTC 5m Strategy Lab</title>
+  <style>
+    :root {
+      --bg: #f6f7f9; --panel: #ffffff; --ink: #14171c; --muted: #636b78; --line: #e3e6eb;
+      --up: #0f8a5f; --down: #c2413b; --accent: #2f5bd3; --warn: #b7791f;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0d1014; --panel: #151a20; --ink: #e8ebf0; --muted: #8a93a1; --line: #252c35; --up: #34c38f; --down: #f06a62; --accent: #7c9cff; --warn: #e5a93b; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { max-width: 1180px; margin: 0 auto; padding: 20px 16px 48px; }
+    h1 { font-size: 20px; margin: 0; }
+    h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+    .sub { color: var(--muted); font-size: 13px; }
+    .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 14px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+    .wide { grid-column: 1 / -1; }
+    .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-variant-numeric: tabular-nums; }
+    .kv span:nth-child(odd) { color: var(--muted); }
+    .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+    .ok { background: color-mix(in srgb, var(--up) 18%, transparent); color: var(--up); }
+    .wait { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+    .pos { color: var(--up); } .neg { color: var(--down); }
+    .scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; }
+    th:first-child, td:first-child { text-align: left; }
+    td.reason { text-align: left; color: var(--muted); }
+    .bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+    .bar > div { height: 100%; background: var(--accent); }
+    .prob { display: grid; grid-template-columns: 70px 1fr 52px; gap: 8px; align-items: center; margin: 6px 0; }
+    .legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+    button { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit; }
+    button:hover { border-color: var(--accent); }
+    header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: flex-end; }
+    .empty { color: var(--muted); padding: 12px 0; }
+    svg text { fill: var(--muted); font-size: 11px; }
+  </style>
 </head>
-<body class="bg-[#0b0e11] text-slate-200 min-h-screen font-sans antialiased">
-  <div class="max-w-6xl mx-auto px-4 py-6 md:py-10">
-    <header class="flex flex-col lg:flex-row lg:items-end justify-between gap-6 border-b border-slate-800 pb-8">
-      <div>
-        <h1 class="text-2xl md:text-3xl font-black text-white tracking-tight">BTC 5m Up/Down</h1>
-        <p class="text-slate-500 text-sm mt-1">Live bot state (mirrors PM2) · trade history · confidence</p>
-        <div class="flex flex-wrap gap-4 mt-3 font-mono text-[10px] text-slate-500 uppercase">
-          <span>ET <span id="clock-et" class="text-emerald-400 font-bold">--:--:--</span></span>
-          <span>UTC <span id="clock-utc">--:--:--</span></span>
-        </div>
-      </div>
-      <div class="flex flex-col items-start lg:items-end gap-3">
-        <nav class="flex rounded-lg bg-[#161a1e] p-1 border border-slate-800">
-          <button type="button" data-tab="live" class="tab-btn px-4 py-2 rounded-md text-xs font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-400">Live</button>
-          <button type="button" data-tab="history" class="tab-btn px-4 py-2 rounded-md text-xs font-bold uppercase tracking-wider text-slate-500 hover:text-slate-300">History</button>
-        </nav>
-        <div class="text-right w-full lg:w-auto">
-          <p class="text-slate-500 text-[10px] font-bold uppercase tracking-widest">USDC (funding wallet)</p>
-          <p id="totalVal" class="text-4xl font-black text-white tracking-tighter">—</p>
-          <p id="lastSync" class="text-[10px] text-slate-600 font-mono mt-1"></p>
-        </div>
-      </div>
-    </header>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>BTC 5m Strategy Lab</h1>
+      <div class="sub">Paper-trading every strategy on live Polymarket data · <span id="updated">waiting for bot…</span></div>
+    </div>
+    <div class="sub">Wallet: <span id="wallet">—</span> · <button id="reset" type="button">Reset sim bankrolls</button></div>
+  </header>
 
-    <!-- Live -->
-    <section id="panel-live" class="mt-8 space-y-6">
-      <div id="dash-empty" class="hidden rounded-2xl border border-amber-900/40 bg-amber-950/20 px-4 py-3 text-amber-200/90 text-sm">
-        No <code class="text-amber-100">logs/dashboard.json</code> yet. Start the bot with <code class="text-amber-100">npm start</code> (same machine) so the UI can show the 5m market view.
-      </div>
-
-      <div class="grid md:grid-cols-2 gap-4">
-        <div class="rounded-2xl border border-slate-800 bg-[#161a1e] p-5 shadow-xl">
-          <h2 class="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">Market</h2>
-          <p id="m-question" class="text-white font-semibold leading-snug">—</p>
-          <p id="m-slug" class="text-xs font-mono text-slate-500 mt-2">—</p>
-          <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <span class="text-[10px] uppercase text-slate-500">Time left (window)</span>
-              <p id="m-time" class="font-mono text-emerald-400 font-bold">—</p>
-            </div>
-            <div>
-              <span class="text-[10px] uppercase text-slate-500">Settlement</span>
-              <p id="m-settle" class="font-mono text-slate-300">—</p>
-            </div>
-            <div>
-              <span class="text-[10px] uppercase text-emerald-500">↑ UP</span>
-              <p id="m-up" class="font-mono text-lg text-white">—</p>
-            </div>
-            <div>
-              <span class="text-[10px] uppercase text-rose-500">↓ DOWN</span>
-              <p id="m-down" class="font-mono text-lg text-white">—</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="rounded-2xl border border-slate-800 bg-[#161a1e] p-5 shadow-xl">
-          <h2 class="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">Model &amp; signal</h2>
-          <div class="space-y-2 text-sm">
-            <p><span class="text-slate-500">Confidence</span> <span id="d-conf" class="font-mono text-white font-bold">—</span></p>
-            <p><span class="text-slate-500">Context</span> <span id="d-gpt" class="font-mono text-slate-300">—</span></p>
-            <p><span class="text-slate-500">PolySwings</span> <span id="d-polyswings" class="font-mono text-cyan-300/90 text-xs leading-relaxed block mt-0.5">—</span></p>
-            <p><span class="text-slate-500">TA predict</span> <span id="d-predict" class="font-mono text-slate-300">—</span></p>
-            <p><span class="text-slate-500">Signal</span> <span id="d-signal" class="font-mono text-emerald-400 font-bold">—</span></p>
-            <p><span class="text-slate-500">Regime</span> <span id="d-regime" class="font-mono text-slate-400">—</span></p>
-          </div>
-        </div>
-      </div>
-
-      <div class="grid md:grid-cols-2 gap-4">
-        <div class="rounded-2xl border border-slate-800 bg-[#161a1e] p-5">
-          <h2 class="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">Chainlink · Binance</h2>
-          <p class="text-sm"><span class="text-slate-500">Price to beat</span> <span id="d-ptb" class="font-mono text-white">—</span></p>
-          <p class="text-sm mt-1"><span class="text-slate-500">Chainlink BTC</span> <span id="d-cl" class="font-mono text-white">—</span></p>
-          <p class="text-sm mt-1"><span class="text-slate-500">Binance spot</span> <span id="d-bn" class="font-mono text-white">—</span></p>
-        </div>
-
-        <div class="rounded-2xl border border-slate-800 bg-[#161a1e] p-5">
-          <h2 class="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">Auto-bid (.env)</h2>
-          <ul id="d-cfg" class="text-xs font-mono text-slate-400 space-y-1.5"></ul>
-          <p id="d-arm" class="mt-4 text-sm font-bold"></p>
-        </div>
-      </div>
-
-      <div id="sim-panel" class="hidden rounded-2xl border border-slate-800 bg-[#161a1e] p-5 shadow-xl">
-        <div class="flex items-center justify-between gap-3">
-          <h2 class="text-[10px] font-black uppercase tracking-widest text-cyan-400/90">Simulation scenarios</h2>
-          <p id="sim-overall" class="text-xs font-mono text-slate-300">—</p>
-        </div>
-        <p id="sim-summary" class="mt-2 text-xs font-mono text-slate-400">—</p>
-        <div id="sim-bars" class="mt-4 space-y-2"></div>
-        <div class="mt-5 border-t border-slate-800 pt-4">
-          <h3 class="text-[10px] font-black uppercase tracking-widest text-cyan-300/90">Simulation controls</h3>
-          <div class="grid md:grid-cols-4 gap-3 mt-3">
-            <label class="text-[10px] uppercase font-bold text-slate-500">Max bid
-              <input type="number" step="0.01" min="0.01" max="0.99" id="sim-max-bid" class="mt-1 block w-full rounded-lg bg-[#0b0e11] border border-slate-700 px-3 py-2 text-sm font-mono" />
-            </label>
-            <label class="text-[10px] uppercase font-bold text-slate-500">Budget
-              <input type="number" step="1" min="0" id="sim-budget" class="mt-1 block w-full rounded-lg bg-[#0b0e11] border border-slate-700 px-3 py-2 text-sm font-mono" />
-            </label>
-            <label class="text-[10px] uppercase font-bold text-slate-500">Bet size
-              <input type="number" step="0.1" min="0" id="sim-bet" class="mt-1 block w-full rounded-lg bg-[#0b0e11] border border-slate-700 px-3 py-2 text-sm font-mono" />
-            </label>
-            <label class="text-[10px] uppercase font-bold text-slate-500">Threshold
-              <input type="number" step="1" min="1" max="100" id="sim-threshold" class="mt-1 block w-full rounded-lg bg-[#0b0e11] border border-slate-700 px-3 py-2 text-sm font-mono" />
-            </label>
-            <label class="text-[10px] uppercase font-bold text-slate-500">Risk appetite
-              <input type="number" step="0.01" min="0" max="1" id="sim-risk" class="mt-1 block w-full rounded-lg bg-[#0b0e11] border border-slate-700 px-3 py-2 text-sm font-mono" />
-            </label>
-            <label class="text-[10px] uppercase font-bold text-slate-500">Risk step
-              <input type="number" step="0.01" min="0" max="0.5" id="sim-risk-step" class="mt-1 block w-full rounded-lg bg-[#0b0e11] border border-slate-700 px-3 py-2 text-sm font-mono" />
-            </label>
-            <label class="text-[10px] uppercase font-bold text-slate-500">Entry min (m)
-              <input type="number" step="0.1" min="0" max="20" id="sim-entry-min" class="mt-1 block w-full rounded-lg bg-[#0b0e11] border border-slate-700 px-3 py-2 text-sm font-mono" />
-            </label>
-            <label class="text-[10px] uppercase font-bold text-slate-500">Entry max (m)
-              <input type="number" step="0.1" min="0.1" max="20" id="sim-entry-max" class="mt-1 block w-full rounded-lg bg-[#0b0e11] border border-slate-700 px-3 py-2 text-sm font-mono" />
-            </label>
-          </div>
-          <div class="mt-3 flex flex-wrap gap-2">
-            <button type="button" id="sim-save" class="rounded-lg bg-cyan-700 hover:bg-cyan-600 px-4 py-2 text-xs font-bold uppercase">Save controls</button>
-            <button type="button" id="sim-reset" class="rounded-lg bg-rose-700 hover:bg-rose-600 px-4 py-2 text-xs font-bold uppercase">Reset sim + logs</button>
-          </div>
-          <p id="sim-feedback" class="mt-2 text-xs font-mono text-slate-500 min-h-[1.25rem]"></p>
-        </div>
-      </div>
-
-      <div class="rounded-2xl border border-amber-900/30 bg-[#161a1e] p-5 shadow-xl">
-        <h2 class="text-[10px] font-black uppercase tracking-widest text-amber-500/90 mb-2">Manual bid override</h2>
-        <p class="text-xs text-slate-500 mb-4 leading-relaxed">
-          Queues one live buy on the <span class="text-slate-400">current dashboard market</span> (same <code class="text-slate-400">POSITION_SIZE_USD</code> as the bot). Skips model, timing window, cooldown, circuit breaker, and auto guards. Order placement still requires <code class="text-slate-400">ENABLE_LIVE_TRADING=true</code>, USDC, and your max-bid / ladder rules.
-        </p>
-        <div id="manual-bid-secret-wrap" class="hidden mb-3">
-          <label class="text-[10px] uppercase font-bold text-slate-500 block">Dashboard secret</label>
-          <input type="password" id="manual-bid-secret" autocomplete="off" class="mt-1 w-full max-w-md rounded-lg bg-[#0b0e11] border border-slate-700 px-3 py-2 text-sm font-mono" placeholder="DASHBOARD_MANUAL_BID_SECRET" />
-        </div>
-        <div class="flex flex-wrap gap-3">
-          <button type="button" id="manual-bid-up" class="rounded-xl px-5 py-3 text-sm font-black uppercase tracking-wide bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-500/40 disabled:opacity-40 disabled:pointer-events-none transition-colors">
-            Bid UP
-          </button>
-          <button type="button" id="manual-bid-down" class="rounded-xl px-5 py-3 text-sm font-black uppercase tracking-wide bg-rose-600 hover:bg-rose-500 text-white border border-rose-500/40 disabled:opacity-40 disabled:pointer-events-none transition-colors">
-            Bid DOWN
-          </button>
-        </div>
-        <p id="manual-bid-pending" class="mt-3 text-xs font-mono text-cyan-400/90 min-h-[1.25rem]"></p>
-        <p id="manual-bid-feedback" class="mt-1 text-xs font-mono text-slate-500 min-h-[1.25rem]"></p>
-      </div>
-
-      <div>
-        <h2 class="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-3">Recent CLOB fills (api.log)</h2>
-        <div class="rounded-2xl border border-slate-800 overflow-x-auto bg-[#161a1e] shadow-xl">
-          <table class="w-full min-w-[640px] text-left text-sm whitespace-nowrap">
-            <thead class="bg-[#0b0e11] text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-800">
-              <tr>
-                <th class="p-4">Time (ET)</th>
-                <th class="p-4">Side</th>
-                <th class="p-4 text-right">Price</th>
-                <th class="p-4 text-right">Cost</th>
-                <th class="p-4 text-center">Conf.</th>
-                <th class="p-4 text-center">Outcome</th>
-              </tr>
-            </thead>
-            <tbody id="fillsTable" class="divide-y divide-slate-800/40"></tbody>
-          </table>
-        </div>
+  <div class="grid">
+    <section class="panel">
+      <h2>Current round</h2>
+      <div id="question" style="font-weight:600;margin-bottom:8px">—</div>
+      <div class="kv">
+        <span>Time left</span><span id="timeLeft">—</span>
+        <span>Status</span><span id="status">—</span>
+        <span>Price to beat</span><span id="ptb">—</span>
+        <span>Chainlink</span><span id="price">—</span>
+        <span>Volatility</span><span id="vol">—</span>
+        <span>Feeds</span><span id="feeds">—</span>
       </div>
     </section>
+    <section class="panel">
+      <h2>P(UP) estimates</h2>
+      <div id="probs"></div>
+      <div class="sub" style="margin-top:8px">Fair = volatility model on distance to price-to-beat. Learned = online model trained on settled rounds. Market = order-book mid.</div>
+    </section>
+    <section class="panel">
+      <h2>Model scorecard <span class="sub">(log-loss, lower is better)</span></h2>
+      <div id="scorecard" class="kv"></div>
+      <div id="weights" class="sub" style="margin-top:8px"></div>
+    </section>
 
-    <!-- History -->
-    <section id="panel-history" class="mt-8 hidden space-y-6">
-      <div class="flex flex-col sm:flex-row flex-wrap gap-3 items-end">
-        <label class="text-[10px] uppercase font-bold text-slate-500">Preset
-          <select id="hist-preset" class="mt-1 block w-full sm:w-44 rounded-lg bg-[#161a1e] border border-slate-700 px-3 py-2 text-sm">
-            <option value="24">Last 24 hours</option>
-            <option value="48">Last 48 hours</option>
-            <option value="168">Last 7 days</option>
-            <option value="custom">Custom range</option>
-          </select>
-        </label>
-        <label id="wrap-from" class="text-[10px] uppercase font-bold text-slate-500 hidden">From
-          <input type="datetime-local" id="hist-from" class="mt-1 block rounded-lg bg-[#161a1e] border border-slate-700 px-3 py-2 text-sm font-mono" />
-        </label>
-        <label id="wrap-to" class="text-[10px] uppercase font-bold text-slate-500 hidden">To
-          <input type="datetime-local" id="hist-to" class="mt-1 block rounded-lg bg-[#161a1e] border border-slate-700 px-3 py-2 text-sm font-mono" />
-        </label>
-        <button type="button" id="hist-apply" class="rounded-lg bg-slate-700 hover:bg-slate-600 px-4 py-2 text-xs font-bold uppercase">Apply</button>
-      </div>
+    <section class="panel wide">
+      <h2>Strategies · safe → risky</h2>
+      <div class="scroll"><table id="leaderboard"></table></div>
+    </section>
 
-      <div>
-        <h2 class="text-lg font-bold text-white mb-3">Live trades (logged)</h2>
-        <p class="text-xs text-slate-500 mb-2">Mapped to confidence from <code class="text-slate-400">trade_history.csv</code>; outcomes from Gamma once markets resolve.</p>
-        <div class="rounded-2xl border border-slate-800 overflow-x-auto bg-[#161a1e]">
-          <table class="w-full min-w-[700px] text-left text-sm whitespace-nowrap">
-            <thead class="bg-[#0b0e11] text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-800">
-              <tr>
-                <th class="p-3"><button type="button" data-hist-sort="timestamp" class="hist-sort-btn">Time</button></th>
-                <th class="p-3"><button type="button" data-hist-sort="decisionType" class="hist-sort-btn">Type</button></th>
-                <th class="p-3"><button type="button" data-hist-sort="side" class="hist-sort-btn">Side</button></th>
-                <th class="p-3 text-right"><button type="button" data-hist-sort="confidence" class="hist-sort-btn">Conf @ bid</button></th>
-                <th class="p-3 text-right"><button type="button" data-hist-sort="confidenceSwingMeanAbs30s" class="hist-sort-btn">Conf swing 30s</button></th>
-                <th class="p-3 text-right"><button type="button" data-hist-sort="taPredictScore" class="hist-sort-btn">TA predict @ bid</button></th>
-                <th class="p-3 text-right"><button type="button" data-hist-sort="taPredictSwingMeanAbs30s" class="hist-sort-btn">TA swing 30s</button></th>
-                <th class="p-3 text-right"><button type="button" data-hist-sort="amountUsd" class="hist-sort-btn">$</button></th>
-                <th class="p-3"><button type="button" data-hist-sort="status" class="hist-sort-btn">Status</button></th>
-                <th class="p-3"><button type="button" data-hist-sort="reason" class="hist-sort-btn">Reason</button></th>
-                <th class="p-3 text-center"><button type="button" data-hist-sort="outcome" class="hist-sort-btn">Outcome</button></th>
-              </tr>
-            </thead>
-            <tbody id="hist-live" class="divide-y divide-slate-800/40"></tbody>
-          </table>
-        </div>
-      </div>
+    <section class="panel wide">
+      <h2>Equity by strategy</h2>
+      <div id="equity"></div>
+    </section>
 
-      <div>
-        <h2 class="text-lg font-bold text-white mb-3">Simulated (paper)</h2>
-        <div class="rounded-2xl border border-slate-800 overflow-x-auto bg-[#161a1e]">
-          <table class="w-full min-w-[620px] text-left text-sm whitespace-nowrap">
-            <thead class="bg-[#0b0e11] text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-800">
-              <tr>
-                <th class="p-3">Settled</th>
-                <th class="p-3">Scenario</th>
-                <th class="p-3">Side</th>
-                <th class="p-3 text-center">Winner</th>
-                <th class="p-3 text-right">Bids</th>
-                <th class="p-3 text-right">Round PnL</th>
-                <th class="p-3 text-right">Total PnL</th>
-                <th class="p-3 text-right">Balance</th>
-              </tr>
-            </thead>
-            <tbody id="hist-sim" class="divide-y divide-slate-800/40"></tbody>
-          </table>
-        </div>
-      </div>
+    <section class="panel">
+      <h2>Adaptive: top shadow variants</h2>
+      <div class="scroll"><table id="variants"></table></div>
+    </section>
+    <section class="panel">
+      <h2>Calibration (learned model)</h2>
+      <div class="scroll"><table id="calibration"></table></div>
+    </section>
 
-      <p class="text-[11px] text-slate-600 leading-relaxed">
-        Resolution: outcome tokens are matched via Gamma <code class="text-slate-500">GET /markets?clob_token_ids=…</code> (not CLOB <code class="text-slate-500">/markets/{id}</code> with a token id — that was the earlier bug). Results are cached in <code class="text-slate-500">logs/outcome_resolution_cache.json</code>.
-      </p>
+    <section class="panel wide">
+      <h2>Recent simulated trades</h2>
+      <div class="scroll"><table id="trades"></table></div>
     </section>
   </div>
+</main>
 
-  <script>
-    const $ = (id) => document.getElementById(id);
-    const HIST_SORT_ICONS = { asc: "↑", desc: "↓" };
-    const histLiveSort = { key: "timestamp", dir: "desc" };
-    let histLiveRows = [];
-    let lastMarketSlug = "";
-    let manualBidAuthRequired = false;
-    let manualFeedbackTimer = null;
-    let simControlLoaded = false;
+<script>
+const COLORS = ["#8a93a1", "#2f5bd3", "#0f8a5f", "#b7791f", "#7c3aed", "#c2413b", "#db2777"];
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const money = (x) => (x === null || x === undefined || !isFinite(x) ? "—" : `${x < 0 ? "-" : ""}$${Math.abs(x).toFixed(2)}`);
+const pct = (x, d = 1) => (x === null || x === undefined || !isFinite(x) ? "—" : `${(x * 100).toFixed(d)}%`);
+const signed = (text, x) => `<span class="${x > 0 ? "pos" : x < 0 ? "neg" : ""}">${text}</span>`;
 
-    function setManualFeedback(text, cls) {
-      const el = $("manual-bid-feedback");
-      el.textContent = text || "";
-      el.className = "mt-1 text-xs font-mono min-h-[1.25rem] " + (cls || "text-slate-500");
-      if (manualFeedbackTimer) clearTimeout(manualFeedbackTimer);
-      if (text) {
-        manualFeedbackTimer = setTimeout(() => {
-          el.textContent = "";
-          el.className = "mt-1 text-xs font-mono text-slate-500 min-h-[1.25rem]";
-        }, 8000);
-      }
+function fmtSecs(s) {
+  if (!isFinite(s)) return "—";
+  const t = Math.max(0, Math.floor(s));
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+
+function renderRound(st) {
+  const c = st.context || {};
+  $("question").textContent = st.round?.question || "Waiting for market…";
+  $("timeLeft").textContent = fmtSecs(c.secondsLeft);
+  $("status").innerHTML = c.tradeable ? '<span class="pill ok">tradeable</span>' : `<span class="pill wait">${esc(c.notTradeableReason || "—")}</span>`;
+  $("ptb").textContent = c.ptb ? `$${c.ptb.toFixed(2)}` : "—";
+  const diff = c.ptb && c.price ? c.price - c.ptb : null;
+  $("price").innerHTML = c.price ? `$${c.price.toFixed(2)} ${diff === null ? "" : signed(`(${diff >= 0 ? "+" : ""}${diff.toFixed(2)})`, diff)}` : "—";
+  $("vol").textContent = c.sigma ? `${(c.sigma * Math.sqrt(365 * 24 * 3600) * 100).toFixed(0)}% annualized` : "—";
+  $("feeds").textContent = st.feeds ? `CL ${st.feeds.clAge} · books ${st.feeds.books}` : "—";
+  const probs = c.probs || {};
+  $("probs").innerHTML = ["fair", "learned", "market"].map((k) => `
+    <div class="prob"><span>${k}</span><div class="bar"><div style="width:${probs[k] == null ? 0 : probs[k] * 100}%"></div></div><span>${pct(probs[k])}</span></div>`).join("");
+}
+
+function renderLearner(sim) {
+  const sc = sim.learner.scorecard;
+  $("scorecard").innerHTML = ["learned", "fair", "market"].map((k) =>
+    `<span>${k}</span><span>${sc[k]?.n ? `${sc[k].logLoss.toFixed(4)} <span class="sub">brier ${sc[k].brier.toFixed(4)} · n=${sc[k].n}</span>` : "—"}</span>`).join("");
+  const sn = sim.settlementNoise || {};
+  const pc = sim.ptbCheck || {};
+  $("weights").innerHTML = `Rounds learned: ${sim.learner.updates} · weights: ${esc(Object.entries(sim.learner.weights).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(", "))}<br>` +
+    `Settlement noise: ${sn.stdev ? (sn.stdev * 1e4).toFixed(2) : "—"} bp per end (n=${sn.n ?? 0}) · official vs observed start: mean $${pc.meanAbsDiff?.toFixed(2) ?? "—"} · ` +
+    `rounds where observed ticks called the wrong winner: ${pc.mismatchedOutcomes ?? 0}/${pc.n ?? 0}`;
+  const cal = sim.learner.calibration.learned;
+  $("calibration").innerHTML = `<tr><th>Predicted</th><th>Samples</th><th>Avg predicted</th><th>Actual UP</th></tr>` +
+    cal.map((b, i) => b.n ? `<tr><td>${i * 10}–${i * 10 + 10}%</td><td>${b.n}</td><td>${pct(b.sumP / b.n)}</td><td>${pct(b.wins / b.n)}</td></tr>` : "").join("");
+}
+
+function renderLeaderboard(sim) {
+  const rows = sim.strategies.map((s, i) => `
+    <tr title="${esc(s.description)}">
+      <td><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${COLORS[i % COLORS.length]};margin-right:6px"></i>${esc(s.label)}</td>
+      <td>${money(s.equity)}</td><td>${signed(pct(s.roi), s.roi)}</td><td>${s.bets}</td><td>${pct(s.winRate)}</td>
+      <td>${signed(money(s.pnl), s.pnl)}</td><td>${money(s.expectedPnl)}</td><td>${money(s.fees)}</td>
+      <td>${signed(pct(s.returnOnStaked), s.returnOnStaked)}</td><td>${pct(s.maxDrawdown)}</td><td>${s.open}</td>
+      <td class="reason">${esc(s.busted ? "BUSTED" : s.currentVariant ? `using ${s.currentVariant}` : s.lastReason || "")}</td>
+    </tr>`).join("");
+  $("leaderboard").innerHTML = `<tr><th>Strategy</th><th>Equity</th><th>ROI</th><th>Bets</th><th>Win%</th><th>P&amp;L</th><th>Expected</th><th>Fees</th><th>Ret/$</th><th>Max DD</th><th>Open</th><th>Status</th></tr>${rows}`;
+}
+
+function renderEquity(sim) {
+  const series = sim.strategies.map((s, i) => ({ label: s.label, color: COLORS[i % COLORS.length], pts: [[null, s.start], ...(s.equityCurve || [])] }));
+  const n = Math.max(...series.map((s) => s.pts.length));
+  if (n < 3) {
+    $("equity").innerHTML = '<div class="empty">Equity curves appear after a few rounds settle.</div>';
+    return;
+  }
+  const W = 1000, H = 220, P = 36;
+  const all = series.flatMap((s) => s.pts.map((p) => p[1]));
+  const lo = Math.min(...all), hi = Math.max(...all), span = hi - lo || 1;
+  const x = (i, len) => P + (i / Math.max(1, len - 1)) * (W - P - 8);
+  const y = (v) => 8 + (1 - (v - lo) / span) * (H - 30);
+  const lines = series.map((s) => `<polyline fill="none" stroke="${s.color}" stroke-width="1.8" points="${s.pts.map((p, i) => `${x(i, s.pts.length).toFixed(1)},${y(p[1]).toFixed(1)}`).join(" ")}"/>`).join("");
+  $("equity").innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="none" style="height:220px">
+      <text x="2" y="14">${money(hi)}</text><text x="2" y="${H - 20}">${money(lo)}</text>
+      <text x="${P}" y="${H - 4}">settled bets →</text>${lines}</svg>
+    <div class="legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.label)}</span>`).join("")}</div>`;
+}
+
+function renderVariants(sim) {
+  if (!sim.adaptive.length) {
+    $("variants").innerHTML = '<tr><td class="empty">No shadow bets settled yet.</td></tr>';
+    return;
+  }
+  $("variants").innerHTML = `<tr><th>Variant</th><th>Bets</th><th>Ret/$</th><th>Lower bound</th></tr>` +
+    sim.adaptive.map((v) => `<tr><td>${esc(v.label)}</td><td>${v.n}</td><td>${signed(pct(v.mean, 2), v.mean)}</td><td>${signed(pct(v.lcb, 2), v.lcb)}</td></tr>`).join("");
+}
+
+async function refreshTrades() {
+  try {
+    const { sim } = await (await fetch("/api/trades?limit=40")).json();
+    if (!sim.length) {
+      $("trades").innerHTML = '<tr><td class="empty">No settled simulated trades yet.</td></tr>';
+      return;
     }
+    $("trades").innerHTML = `<tr><th>Settled</th><th>Strategy</th><th>Side</th><th>Exec</th><th>Secs left</th><th>Price</th><th>Cost</th><th>Fee</th><th>P(model)</th><th>Edge/sh</th><th>Result</th><th>P&amp;L</th></tr>` +
+      sim.map((t) => `<tr><td>${new Date(t.settled_at).toLocaleTimeString()}</td><td>${esc(t.strategy)}</td><td>${esc(t.side)}</td><td>${esc(t.execution)}</td>
+        <td>${Number(t.seconds_left).toFixed(0)}</td><td>${Number(t.avg_price).toFixed(3)}</td><td>${money(Number(t.cost_usd))}</td><td>${money(Number(t.fee_usd))}</td>
+        <td>${pct(Number(t.p_model))}</td><td>${Number(t.edge_per_share).toFixed(3)}</td><td>${t.won === "true" ? '<span class="pos">WIN</span>' : '<span class="neg">LOSS</span>'}</td>
+        <td>${signed(money(Number(t.pnl_usd)), Number(t.pnl_usd))}</td></tr>`).join("");
+  } catch {
+    // ignore
+  }
+}
 
-    function setSimFeedback(text, cls = "text-slate-500") {
-      const el = $("sim-feedback");
-      el.textContent = text || "";
-      el.className = `mt-2 text-xs font-mono min-h-[1.25rem] ${cls}`;
-    }
+async function refresh() {
+  try {
+    const { state, wallet } = await (await fetch("/api/state")).json();
+    $("wallet").textContent = wallet == null ? "not configured" : money(wallet);
+    if (!state) return;
+    const age = (Date.now() - new Date(state.updatedAt).getTime()) / 1000;
+    $("updated").textContent = age > 10 ? `last update ${Math.round(age)}s ago — is the bot running?` : `updated ${new Date(state.updatedAt).toLocaleTimeString()}`;
+    renderRound(state);
+    renderLearner(state.sim);
+    renderLeaderboard(state.sim);
+    renderEquity(state.sim);
+    renderVariants(state.sim);
+  } catch {
+    $("updated").textContent = "dashboard server unreachable";
+  }
+}
 
-    async function loadSimControls(force = false) {
-      if (simControlLoaded && !force) return;
-      try {
-        const res = await fetch("/api/sim-controls");
-        const j = await res.json();
-        const c = j.controls || {};
-        const set = (id, v) => {
-          if (v === null || v === undefined || !Number.isFinite(Number(v))) return;
-          $(id).value = String(v);
-        };
-        set("sim-max-bid", c.maxBidPrice);
-        set("sim-budget", c.budgetUsd);
-        set("sim-bet", c.betAmountUsd);
-        set("sim-threshold", c.tradeThreshold);
-        set("sim-risk", c.riskAppetite);
-        set("sim-risk-step", c.riskAppetiteStep);
-        set("sim-entry-min", c.entryMinTimeLeftMin);
-        set("sim-entry-max", c.entryMaxTimeLeftMin);
-        simControlLoaded = true;
-      } catch (e) {
-        setSimFeedback(String(e.message || e), "text-rose-400");
-      }
-    }
+$("reset").addEventListener("click", async () => {
+  if (!confirm("Reset every simulated bankroll to its starting value? Learned models are kept.")) return;
+  const r = await fetch("/api/sim-reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  alert(r.ok ? "Reset requested — the bot applies it within a second." : "Reset failed (DASHBOARD_SECRET set?)");
+});
 
-    async function saveSimControls() {
-      try {
-        const body = {
-          maxBidPrice: Number($("sim-max-bid").value),
-          budgetUsd: Number($("sim-budget").value),
-          betAmountUsd: Number($("sim-bet").value),
-          tradeThreshold: Number($("sim-threshold").value),
-          riskAppetite: Number($("sim-risk").value),
-          riskAppetiteStep: Number($("sim-risk-step").value),
-          entryMinTimeLeftMin: Number($("sim-entry-min").value),
-          entryMaxTimeLeftMin: Number($("sim-entry-max").value)
-        };
-        const res = await fetch("/api/sim-controls", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body)
-        });
-        const j = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          setSimFeedback(j.error || `HTTP ${res.status}`, "text-rose-400");
-          return;
-        }
-        setSimFeedback("Simulation controls saved. Bot applies them on the next tick.", "text-emerald-400/90");
-      } catch (e) {
-        setSimFeedback(String(e.message || e), "text-rose-400");
-      }
-    }
-
-    async function resetSimulation() {
-      if (!confirm("Reset simulated balances/stats and clear simulation CSV logs?")) return;
-      try {
-        const res = await fetch("/api/sim-reset", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clearLogs: true })
-        });
-        const j = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          setSimFeedback(j.error || `HTTP ${res.status}`, "text-rose-400");
-          return;
-        }
-        setSimFeedback("Simulation reset queued. Wait one bot tick and refresh History.", "text-emerald-400/90");
-        loadHistory();
-      } catch (e) {
-        setSimFeedback(String(e.message || e), "text-rose-400");
-      }
-    }
-
-    async function postManualBid(side) {
-      if (!lastMarketSlug) {
-        setManualFeedback("No market loaded yet — wait for the bot to write dashboard.json.", "text-amber-400");
-        return;
-      }
-      if (manualBidAuthRequired) {
-        const sec = $("manual-bid-secret").value.trim();
-        if (!sec) {
-          setManualFeedback("Set DASHBOARD_MANUAL_BID_SECRET in this field first.", "text-amber-400");
-          return;
-        }
-      }
-      try {
-        const body = { side, marketSlug: lastMarketSlug };
-        if (manualBidAuthRequired) body.secret = $("manual-bid-secret").value.trim();
-        const res = await fetch("/api/manual-bid", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body)
-        });
-        const j = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          setManualFeedback(j.error === "unauthorized" ? "Unauthorized — check secret." : (j.error || `HTTP ${res.status}`), "text-rose-400");
-          return;
-        }
-        setManualFeedback(`Queued ${side} for this market. Bot consumes within one poll (~2s).`, "text-emerald-400/90");
-      } catch (e) {
-        setManualFeedback(String(e.message || e), "text-rose-400");
-      }
-    }
-
-    $("manual-bid-up").addEventListener("click", () => postManualBid("UP"));
-    $("manual-bid-down").addEventListener("click", () => postManualBid("DOWN"));
-
-    function updateClocks() {
-      const now = new Date();
-      $("clock-utc").textContent = now.toLocaleTimeString("en-US", { timeZone: "UTC", hour12: false });
-      $("clock-et").textContent = now.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour12: false });
-    }
-    setInterval(updateClocks, 1000);
-    updateClocks();
-
-    document.querySelectorAll(".tab-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const tab = btn.getAttribute("data-tab");
-        document.querySelectorAll(".tab-btn").forEach((b) => {
-          const on = b.getAttribute("data-tab") === tab;
-          b.className = "tab-btn px-4 py-2 rounded-md text-xs font-bold uppercase tracking-wider " + (on ? "bg-emerald-500/20 text-emerald-400" : "text-slate-500 hover:text-slate-300");
-        });
-        $("panel-live").classList.toggle("hidden", tab !== "live");
-        $("panel-history").classList.toggle("hidden", tab !== "history");
-        if (tab === "history") loadHistory();
-      });
-    });
-
-    function fmtEt(iso) {
-      if (!iso) return "—";
-      return new Date(iso).toLocaleString("en-US", { timeZone: "America/New_York", hour12: false });
-    }
-
-    function fmtCents(x) {
-      if (x === null || x === undefined || !Number.isFinite(Number(x))) return "—";
-      return `${Math.round(Number(x) * 100)}¢`;
-    }
-
-    function fmtUsd(x) {
-      if (x === null || x === undefined || !Number.isFinite(Number(x))) return "—";
-      return `$${Number(x).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    }
-
-    function fmtSignedUsd(x) {
-      if (x === null || x === undefined || !Number.isFinite(Number(x))) return "—";
-      const n = Number(x);
-      const sign = n >= 0 ? "+" : "-";
-      return `${sign}$${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-    }
-
-    function sortRank(v) {
-      return v === null || v === undefined || v === "" ? 1 : 0;
-    }
-
-    function sortNum(v) {
-      return Number.isFinite(Number(v)) ? Number(v) : null;
-    }
-
-    function sortTime(v) {
-      const t = new Date(v).getTime();
-      return Number.isFinite(t) ? t : null;
-    }
-
-    function sortText(v) {
-      const s = String(v ?? "").trim();
-      return s || null;
-    }
-
-    function histSortValue(row, key) {
-      if (key === "timestamp") return sortTime(row.timestamp);
-      if (key === "confidence") return sortNum(row.confidence);
-      if (key === "confidenceSwingMeanAbs30s") return sortNum(row.confidenceSwingMeanAbs30s);
-      if (key === "taPredictScore") return sortNum(row.taPredictScore);
-      if (key === "taPredictSwingMeanAbs30s") return sortNum(row.taPredictSwingMeanAbs30s);
-      if (key === "amountUsd") return sortNum(row.amountUsd);
-      return sortText(row[key]);
-    }
-
-    function updateHistSortHeaders() {
-      document.querySelectorAll(".hist-sort-btn").forEach((btn) => {
-        const key = btn.getAttribute("data-hist-sort");
-        const base = btn.getAttribute("data-hist-label") || btn.textContent.replace(/\s+[↑↓]$/, "");
-        btn.setAttribute("data-hist-label", base);
-        const icon = key === histLiveSort.key ? ` ${HIST_SORT_ICONS[histLiveSort.dir]}` : "";
-        btn.textContent = `${base}${icon}`;
-      });
-    }
-
-    function sortHistLiveRows(rows) {
-      const dir = histLiveSort.dir === "asc" ? 1 : -1;
-      const key = histLiveSort.key;
-      return [...rows].sort((a, b) => {
-        const av = histSortValue(a, key);
-        const bv = histSortValue(b, key);
-        const rankDiff = sortRank(av) - sortRank(bv);
-        if (rankDiff !== 0) return rankDiff;
-        if (av === null && bv === null) return 0;
-        if (typeof av === "number" && typeof bv === "number") {
-          if (av === bv) return 0;
-          return av > bv ? dir : -dir;
-        }
-        const cmp = String(av).localeCompare(String(bv), undefined, { sensitivity: "base" });
-        if (cmp === 0) return 0;
-        return cmp > 0 ? dir : -dir;
-      });
-    }
-
-    function renderLiveHistoryRows() {
-      const rows = sortHistLiveRows(histLiveRows);
-      $("hist-live").innerHTML = rows.length
-        ? rows
-            .map((r) => {
-              const conf =
-                r.confidence !== null && Number.isFinite(Number(r.confidence))
-                  ? Number(r.confidence).toFixed(2)
-                  : "—";
-              const confSwing =
-                r.confidenceSwingMeanAbs30s !== null && Number.isFinite(Number(r.confidenceSwingMeanAbs30s))
-                  ? Number(r.confidenceSwingMeanAbs30s).toFixed(2)
-                  : "—";
-              const taPredict =
-                r.taPredictScore !== null && Number.isFinite(Number(r.taPredictScore))
-                  ? Number(r.taPredictScore).toFixed(2)
-                  : "—";
-              const taSwing =
-                r.taPredictSwingMeanAbs30s !== null && Number.isFinite(Number(r.taPredictSwingMeanAbs30s))
-                  ? Number(r.taPredictSwingMeanAbs30s).toFixed(2)
-                  : "—";
-              let oc = r.outcome;
-              let badge = "";
-              if (oc === "WIN") {
-                badge = '<span class="text-emerald-400 font-bold">WIN</span>';
-              } else if (oc === "LOSS") {
-                badge = '<span class="text-rose-400 font-bold">LOSS</span>';
-              } else if (oc === "PENDING") {
-                badge = '<span class="text-slate-500 text-[10px]">PENDING</span>';
-              } else {
-                badge = `<span class="text-slate-600">${oc || "—"}</span>`;
-              }
-              const sideClass =
-                r.side === "UP"
-                  ? "text-emerald-400"
-                  : r.side === "DOWN"
-                    ? "text-rose-400"
-                    : "";
-              const typeBadge = r.decisionType === "made"
-                ? '<span class="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded font-bold">MADE</span>'
-                : '<span class="text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded font-bold">SKIP</span>';
-              return `<tr class="border-b border-slate-800/50">
-                <td class="p-3 font-mono text-[11px] text-slate-400">${fmtEt(r.timestamp)}</td>
-                <td class="p-3">${typeBadge}</td>
-                <td class="p-3 font-bold ${sideClass}">${r.side}</td>
-                <td class="p-3 text-right font-mono">${conf}</td>
-                <td class="p-3 text-right font-mono text-slate-300">${confSwing}</td>
-                <td class="p-3 text-right font-mono text-cyan-300">${taPredict}</td>
-                <td class="p-3 text-right font-mono text-slate-300">${taSwing}</td>
-                <td class="p-3 text-right font-mono text-slate-300">${r.amountUsd ?? "—"}</td>
-                <td class="p-3 text-xs">${r.status}</td>
-                <td class="p-3 text-xs text-slate-500">${r.reason || "—"}</td>
-                <td class="p-3 text-center">${badge}</td>
-              </tr>`;
-            })
-            .join("")
-        : '<tr><td colspan="11" class="p-6 text-center text-slate-500">No rows in range.</td></tr>';
-      updateHistSortHeaders();
-    }
-
-    async function fetchLive() {
-      try {
-        const res = await fetch("/api/live");
-        const j = await res.json();
-        const d = j.dashboard;
-        manualBidAuthRequired = Boolean(j.manualBidAuthRequired);
-        $("manual-bid-secret-wrap").classList.toggle("hidden", !manualBidAuthRequired);
-
-        $("lastSync").textContent = `USDC sync: ${new Date(j.lastUpdate).toLocaleTimeString()}`;
-        const tv = j.wallet?.totalValue;
-        $("totalVal").textContent =
-          tv !== null && tv !== undefined && Number.isFinite(Number(tv)) ? fmtUsd(tv) : j.wallet?.address ? "—" : "Set POLYMARKET_FUNDER_ADDRESS";
-
-        if (!d) {
-          lastMarketSlug = "";
-          $("manual-bid-pending").textContent = "";
-          $("manual-bid-up").disabled = true;
-          $("manual-bid-down").disabled = true;
-          $("dash-empty").classList.remove("hidden");
-          return;
-        }
-        $("dash-empty").classList.add("hidden");
-
-        $("m-question").textContent = d.market?.question || "—";
-        $("m-slug").textContent = d.market?.slug || "—";
-        lastMarketSlug = typeof d.market?.slug === "string" ? d.market.slug.trim() : "";
-        const tlm = d.market?.timeLeftMin;
-        $("m-time").textContent =
-          tlm !== null && tlm !== undefined && Number.isFinite(Number(tlm)) ? `${Number(tlm).toFixed(2)} min` : "—";
-        const slm = d.market?.settlementLeftMin;
-        $("m-settle").textContent =
-          slm !== null && slm !== undefined && Number.isFinite(Number(slm)) ? `${Number(slm).toFixed(2)} min` : "—";
-        $("m-up").textContent = fmtCents(d.market?.up);
-        $("m-down").textContent = fmtCents(d.market?.down);
-
-        const cs = d.model?.confidenceScore;
-        const dir = d.model?.confidenceDirection || "";
-        const ta = d.model?.confidenceTaScore;
-        const aux = d.model?.confidenceAuxiliaryScore;
-        const taAux =
-          ta != null && aux != null && Number.isFinite(Number(ta)) && Number.isFinite(Number(aux))
-            ? ` · TA ${Number(ta).toFixed(0)} · aux ${Number(aux).toFixed(0)}`
-            : "";
-        $("d-conf").textContent =
-          cs !== null && cs !== undefined && Number.isFinite(Number(cs))
-            ? `${Number(cs).toFixed(0)} (${dir})${taAux}`
-            : "—";
-        $("d-gpt").textContent =
-          d.model?.gptDirection != null
-            ? `${d.model.gptDirection} ${d.model.gptScore >= 0 ? "+" : ""}${Number(d.model.gptScore).toFixed(0)} (${d.model.gptConfidencePct}%)`
-            : "—";
-        const ps = d.model?.polySwings;
-        $("d-polyswings").textContent =
-          ps && ps.summary != null
-            ? `${ps.direction ?? "FLAT"} ${Number(ps.score) >= 0 ? "+" : ""}${Number(ps.score).toFixed(0)} — ${ps.summary}`
-            : ps
-              ? `${ps.direction ?? "FLAT"} ${Number(ps.score) >= 0 ? "+" : ""}${Number(ps.score).toFixed(0)}`
-              : "—";
-        $("d-polyswings").title =
-          ps && (ps.sampleCount != null || ps.completedRounds != null)
-            ? `samples=${ps.sampleCount ?? "—"} · rounds=${ps.completedRounds ?? "—"} · termAcc=${ps.terminalAccuracy != null ? (Number(ps.terminalAccuracy) * 100).toFixed(0) + "%" : "—"}`
-            : "";
-        const pu = d.model?.predictUp;
-        const pd = d.model?.predictDown;
-        $("d-predict").textContent =
-          pu != null && pd != null ? `↑ ${(Number(pu) * 100).toFixed(0)}% / ↓ ${(Number(pd) * 100).toFixed(0)}%` : "—";
-        $("d-signal").textContent = d.model?.signal || "—";
-        $("d-regime").textContent = d.model?.regime || "—";
-
-        $("d-ptb").textContent =
-          d.market?.priceToBeat != null ? `$${Number(d.market.priceToBeat).toLocaleString()}` : "—";
-        $("d-cl").textContent =
-          d.market?.chainlinkPrice != null ? `$${Number(d.market.chainlinkPrice).toLocaleString()}` : "—";
-        $("d-bn").textContent =
-          d.market?.binanceSpot != null ? `$${Number(d.market.binanceSpot).toLocaleString()}` : "—";
-
-        const tr = d.trading || {};
-        const liveBal = j.wallet?.totalValue;
-        const budgetUsd =
-          liveBal !== null && liveBal !== undefined && Number.isFinite(Number(liveBal)) ? Number(liveBal) : tr.balanceUsd;
-        const ladder = Array.isArray(tr.confidenceMaxBidLadder) ? tr.confidenceMaxBidLadder : [];
-        const ladderStr = ladder.length
-          ? ladder.map((x) => `${x.threshold}+→${x.maxPrice}`).join(", ")
-          : "(none — uses MAX_BID_PRICE only)";
-        const effTh = tr.effectiveTradeThreshold ?? tr.tradeThreshold;
-        const minEdge = tr.liveMinModelEdge != null ? Number(tr.liveMinModelEdge).toFixed(2) : "—";
-        $("d-cfg").innerHTML = [
-          `<li><span class="text-slate-500">LIVE</span> ${tr.enableLiveTrading ? "on" : "off"}</li>`,
-          `<li>|confidence| ≥ ${effTh} (base ${tr.tradeThreshold}${tr.downSideExtraThreshold ? ` + DOWN +${tr.downSideExtraThreshold}` : ""}) · model edge ≥ ${minEdge}</li>`,
-          `<li>timing ≤ ${tr.tradeTimingSeconds}s · cooldown ${tr.cooldownMinutes}m</li>`,
-          `<li>POSITION_SIZE_USD $${tr.positionSizeUsd} · max bid ${tr.maxBidPrice}</li>`,
-          `<li>Ladder ${ladderStr}</li>`,
-          `<li>Budget ${fmtUsd(budgetUsd)}</li>`,
-          tr.circuitBreakerActive
-            ? `<li class="text-amber-400">Circuit breaker: pause ~${(tr.circuitBreakerRemainingMin ?? 0).toFixed(1)}m left</li>`
-            : ""
-        ].join("");
-
-        const arm = tr.wouldAttemptAutoBid;
-        const block = tr.liveTradeBlockReason && tr.liveTradeBlockReason !== "ok" ? tr.liveTradeBlockReason : "";
-        $("d-arm").innerHTML = arm
-          ? '<span class="text-emerald-400">All guards passed — bot would fire on this tick (if LIVE and liquidity allow).</span>'
-          : `<span class="text-slate-500">Not arming${block ? `: <code class="text-slate-400">${block}</code>` : ""}.</span>`;
-
-        const sim = tr.simulation;
-        const simPanel = $("sim-panel");
-        if (sim && Array.isArray(sim.scenarios) && sim.scenarios.length) {
-          simPanel.classList.remove("hidden");
-          loadSimControls(false);
-          $("sim-summary").textContent = sim.summaryLine || "—";
-          $("sim-overall").textContent = `Overall ${fmtSignedUsd(sim.overallPnlUsd)}`;
-
-          const maxAbs = Math.max(
-            1,
-            ...sim.scenarios.map((s) => Math.abs(Number(s.totalPnlUsd || 0)))
-          );
-          $("sim-bars").innerHTML = sim.scenarios
-            .map((s) => {
-              const pnl = Number(s.totalPnlUsd || 0);
-              const width = Math.max(2, Math.round((Math.abs(pnl) / maxAbs) * 100));
-              const positive = pnl >= 0;
-              const barClass = positive ? "bg-emerald-500/70" : "bg-rose-500/70";
-              return `<div class="space-y-1">
-                <div class="flex justify-between items-center text-xs font-mono">
-                  <span class="text-slate-300">${s.label} · risk ${Number(s.riskAppetite).toFixed(2)} · th ${Number(s.threshold).toFixed(1)}</span>
-                  <span class="${positive ? "text-emerald-400" : "text-rose-400"}">${fmtSignedUsd(pnl)} · rounds ${s.rounds} · bids ${s.totalBids} · resets ${s.resets}</span>
-                </div>
-                <div class="h-2 rounded bg-slate-800 overflow-hidden">
-                  <div class="h-full ${barClass}" style="width:${width}%"></div>
-                </div>
-              </div>`;
-            })
-            .join("");
-        } else {
-          simPanel.classList.add("hidden");
-        }
-
-        const pend = j.manualBidPending;
-        const pendEl = $("manual-bid-pending");
-        if (pend && lastMarketSlug && pend.marketSlug === lastMarketSlug) {
-          if (pend.expired) {
-            pendEl.textContent = "Queued manual bid expired (~3m) — click again if you still want it.";
-            pendEl.className = "mt-3 text-xs font-mono text-amber-400/90 min-h-[1.25rem]";
-          } else {
-            pendEl.textContent = `Awaiting bot: ${pend.side} (queued ${new Date(pend.requestedAt).toLocaleTimeString()})`;
-            pendEl.className = "mt-3 text-xs font-mono text-cyan-400/90 min-h-[1.25rem]";
-          }
-        } else if (pend && lastMarketSlug && pend.marketSlug !== lastMarketSlug) {
-          pendEl.textContent = `Queued ${pend.side} for a different market slug than the one shown — bot will ignore until it matches or the queue expires.`;
-          pendEl.className = "mt-3 text-xs font-mono text-amber-400/80 min-h-[1.25rem]";
-        } else {
-          pendEl.textContent = "";
-          pendEl.className = "mt-3 text-xs font-mono min-h-[1.25rem]";
-        }
-
-        const liveOn = Boolean(tr.enableLiveTrading);
-        const canManual = Boolean(lastMarketSlug);
-        $("manual-bid-up").disabled = !canManual;
-        $("manual-bid-down").disabled = !canManual;
-        $("manual-bid-up").title = !canManual
-          ? "Wait for market slug from the bot"
-          : !liveOn
-            ? "LIVE is off — request will queue but the bot will not place orders"
-            : "Queue manual UP bid";
-        $("manual-bid-down").title = !canManual
-          ? "Wait for market slug from the bot"
-          : !liveOn
-            ? "LIVE is off — request will queue but the bot will not place orders"
-            : "Queue manual DOWN bid";
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    async function fetchFills() {
-      try {
-        const res = await fetch("/api/data");
-        const data = await res.json();
-        const body = $("fillsTable");
-        if (!data.trades?.length) {
-          body.innerHTML =
-            '<tr><td colspan="6" class="p-6 text-center text-slate-500 text-sm">No fills in api.log yet.</td></tr>';
-          return;
-        }
-        body.innerHTML = data.trades
-          .map((t) => {
-            const et = fmtEt(t.ts);
-            let badge = "";
-            if (t.result === "WIN") {
-              badge = '<span class="bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded text-[10px] font-bold">WIN</span>';
-            } else if (t.result === "LOSS") {
-              badge = '<span class="bg-rose-500/20 text-rose-400 px-2 py-0.5 rounded text-[10px] font-bold">LOSS</span>';
-            } else {
-              badge = '<span class="text-slate-500 text-[10px] animate-pulse">PENDING</span>';
-            }
-            const conf =
-              t.confidence !== null && t.confidence !== undefined && Number.isFinite(Number(t.confidence))
-                ? Number(t.confidence).toFixed(0)
-                : "—";
-            const sideClass =
-              t.side === "UP"
-                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                : "bg-rose-500/10 text-rose-400 border border-rose-500/20";
-            return `<tr class="hover:bg-slate-800/30 border-b border-slate-800/50">
-              <td class="p-4 font-mono text-[11px] text-slate-400">${et}</td>
-              <td class="p-4"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${sideClass}">${t.side}</span></td>
-              <td class="p-4 font-mono text-right text-white">${t.price}</td>
-              <td class="p-4 font-mono text-right text-blue-400">$${t.usd}</td>
-              <td class="p-4 text-center font-mono text-slate-300">${conf}</td>
-              <td class="p-4 text-center">${badge}</td>
-            </tr>`;
-          })
-          .join("");
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    function historyQuery() {
-      const preset = $("hist-preset").value;
-      if (preset === "custom") {
-        const from = $("hist-from").value;
-        const to = $("hist-to").value;
-        if (!from || !to) return "hours=24";
-        const fromIso = new Date(from).toISOString();
-        const toIso = new Date(to).toISOString();
-        return `from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`;
-      }
-      return `hours=${preset}`;
-    }
-
-    async function loadHistory() {
-      try {
-        const res = await fetch("/api/history?" + historyQuery());
-        const j = await res.json();
-        histLiveRows = Array.isArray(j.live) ? j.live : [];
-        renderLiveHistoryRows();
-
-        const simRows = j.simulated || [];
-        $("hist-sim").innerHTML = simRows.length
-          ? simRows
-              .map((r) => {
-                const sideClass = r.side === "UP" ? "text-emerald-400" : r.side === "DOWN" ? "text-rose-400" : "text-slate-500";
-                const winner = r.winnerSide || "—";
-                const win = r.win === null ? "—" : r.win ? "WIN" : "LOSS";
-                const winClass = r.win === null ? "text-slate-500" : r.win ? "text-emerald-400" : "text-rose-400";
-                return `<tr class="border-b border-slate-800/50">
-                  <td class="p-3 font-mono text-[11px] text-slate-400">${fmtEt(r.settledAt)}</td>
-                  <td class="p-3 font-mono text-xs text-slate-300">${r.scenario || "—"}</td>
-                  <td class="p-3 font-bold ${sideClass}">${r.side || "—"}</td>
-                  <td class="p-3 text-center font-bold">${winner} <span class="${winClass} ml-1 text-[10px]">${win}</span></td>
-                  <td class="p-3 text-right font-mono">${r.bidsInRound ?? "—"}</td>
-                  <td class="p-3 text-right font-mono">${fmtSignedUsd(r.pnlUsd)}</td>
-                  <td class="p-3 text-right font-mono">${fmtSignedUsd(r.totalPnlUsd)}</td>
-                  <td class="p-3 text-right font-mono">${fmtUsd(r.balanceUsd)}</td>
-                </tr>`;
-              })
-              .join("")
-          : '<tr><td colspan="8" class="p-6 text-center text-slate-500">No simulated rounds in range.</td></tr>';
-      } catch (e) {
-        console.error(e);
-      }
-    }
-
-    $("hist-preset").addEventListener("change", () => {
-      const c = $("hist-preset").value === "custom";
-      $("wrap-from").classList.toggle("hidden", !c);
-      $("wrap-to").classList.toggle("hidden", !c);
-    });
-    document.querySelectorAll(".hist-sort-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const key = btn.getAttribute("data-hist-sort");
-        if (!key) return;
-        if (histLiveSort.key === key) {
-          histLiveSort.dir = histLiveSort.dir === "asc" ? "desc" : "asc";
-        } else {
-          histLiveSort.key = key;
-          histLiveSort.dir = key === "timestamp" ? "desc" : "asc";
-        }
-        renderLiveHistoryRows();
-      });
-    });
-    updateHistSortHeaders();
-    $("hist-apply").addEventListener("click", loadHistory);
-    $("sim-save").addEventListener("click", saveSimControls);
-    $("sim-reset").addEventListener("click", resetSimulation);
-
-    fetchLive();
-    fetchFills();
-    setInterval(fetchLive, 4000);
-    setInterval(fetchFills, 12000);
-  </script>
+refresh();
+refreshTrades();
+setInterval(refresh, 2000);
+setInterval(refreshTrades, 15000);
+</script>
 </body>
 </html>

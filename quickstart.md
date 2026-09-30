@@ -16,7 +16,7 @@ Assumptions:
 3. **Storage:** 20 GiB gp3 is a comfortable default.
 4. **Security group**
    - **Inbound:** TCP `22` from **your IP only** (SSH).
-   - **Optional:** TCP `3000` from your IP if you want the dashboard (`src/server.js`) reachable without an SSH tunnel. Do **not** expose `3000` to `0.0.0.0/0` unless you understand the risk and have set `DASHBOARD_MANUAL_BID_SECRET` if you use manual bid APIs.
+   - **Optional:** TCP `3000` from your IP if you want the dashboard (`src/server.js`) reachable without an SSH tunnel. The dashboard binds to `127.0.0.1` by default (`DASHBOARD_HOST`), so the SSH tunnel below is the recommended way in. If you set `DASHBOARD_HOST=0.0.0.0`, never open `3000` to `0.0.0.0/0` and set `DASHBOARD_SECRET`.
 
 ---
 
@@ -72,7 +72,7 @@ nano .env
 
 Fill at least:
 
-- **`POLYGON_RPC_URL`** (and optionally **`POLYGON_RPC_URLS`**, **`POLYGON_WSS_URLS`**) for reliable Chainlink fallback.
+- Nothing is required for paper trading. See `.env.example` for simulation, learning and (optional) live-trading settings.
 - For live trading: **`PRIVATE_KEY`**, **`POLYMARKET_FUNDER_ADDRESS`**, **`ENABLE_LIVE_TRADING=true`** — see `README.md` and `.env.example`.
 
 The app loads `.env` via `import "dotenv/config"` in `src/index.js` and `src/server.js`, so you do **not** need to `export` variables manually when using PM2 with `cwd` set to the project root (as in `ecosystem.config.cjs`).
@@ -153,7 +153,7 @@ If you did **not** open port `3000` in the security group, browse the dashboard 
 ssh -i /path/to/your-key.pem -L 3000:127.0.0.1:3000 ubuntu@ec2-xx-xx-xx-xx.compute-1.amazonaws.com
 ```
 
-Then open **http://127.0.0.1:3000** in your local browser. The dashboard listens on **`0.0.0.0`** (`src/server.js`), so it is reachable on the instance’s private/public IP as well as via this tunnel.
+Then open **http://127.0.0.1:3000** in your local browser. The dashboard listens on **`127.0.0.1`** by default, so it is only reachable through this tunnel unless you change `DASHBOARD_HOST`.
 
 ---
 

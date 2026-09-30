@@ -2,27 +2,20 @@ import WebSocket from "ws";
 import { CONFIG } from "../config.js";
 import { wsAgentForUrl } from "../net/proxy.js";
 
-function toNumber(x) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : null;
-}
-
-function buildWsUrl(symbol) {
-  const s = String(symbol || "").toLowerCase();
-  return `wss://stream.binance.com:9443/ws/${s}@trade`;
-}
-
-export function startBinanceTradeStream({ symbol = CONFIG.symbol, onUpdate } = {}) {
+/**
+ * Binance spot trade stream. Used as a fast-moving reference: Binance usually moves a beat
+ * before the aggregated Chainlink price that markets settle on.
+ * `ts` is the local receive time so freshness checks share one clock with the rest of the bot.
+ */
+export function startBinanceTradeStream({ symbol = CONFIG.binanceSymbol } = {}) {
   let ws = null;
   let closed = false;
   let reconnectMs = 500;
-  let lastPrice = null;
-  let lastTs = null;
+  let last = null;
 
   const connect = () => {
     if (closed) return;
-
-    const url = buildWsUrl(symbol);
+    const url = `wss://stream.binance.com:9443/ws/${symbol}@trade`;
     ws = new WebSocket(url, { agent: wsAgentForUrl(url) });
 
     ws.on("open", () => {
@@ -32,13 +25,11 @@ export function startBinanceTradeStream({ symbol = CONFIG.symbol, onUpdate } = {
     ws.on("message", (buf) => {
       try {
         const msg = JSON.parse(buf.toString());
-        const p = toNumber(msg.p);
-        if (p === null) return;
-        lastPrice = p;
-        lastTs = Date.now();
-        if (typeof onUpdate === "function") onUpdate({ price: lastPrice, ts: lastTs });
+        const price = Number(msg.p);
+        if (!Number.isFinite(price) || price <= 0) return;
+        last = { ts: Date.now(), price };
       } catch {
-        return;
+        // ignore malformed frames
       }
     });
 
@@ -62,9 +53,7 @@ export function startBinanceTradeStream({ symbol = CONFIG.symbol, onUpdate } = {
   connect();
 
   return {
-    getLast() {
-      return { price: lastPrice, ts: lastTs };
-    },
+    getLast: () => last,
     close() {
       closed = true;
       try {
@@ -72,7 +61,6 @@ export function startBinanceTradeStream({ symbol = CONFIG.symbol, onUpdate } = {
       } catch {
         // ignore
       }
-      ws = null;
     }
   };
 }

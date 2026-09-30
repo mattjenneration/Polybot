@@ -1,226 +1,137 @@
-# Polymarket BTC 15m Assistant
+# Polymarket BTC 5m Strategy Lab
 
-A real-time console trading assistant for Polymarket **"Bitcoin Up or Down" 15-minute** markets.
+A paper-trading lab for Polymarket's **"Bitcoin Up or Down" 5-minute** markets. It runs a set of
+strategies, from safe to risky, side by side on live market data. It records that data so the
+same strategies can be backtested later, and it learns from every settled round.
 
-It combines:
-- Polymarket market selection + UP/DOWN prices + liquidity
-- Polymarket live WS **Chainlink BTC/USD CURRENT PRICE** (same feed shown on the Polymarket UI)
-- Fallback to on-chain Chainlink (Polygon) via HTTP/WSS RPC
-- Binance spot price for reference
-- Short-term TA snapshot (Heiken Ashi, RSI, MACD, VWAP, Delta 1/3m)
-- A simple live **Predict (LONG/SHORT %)** derived from the assistant’s current TA scoring
-- A separate **GPT-indicators** confidence line (derivatives + Polymarket microstructure factors)
+Live trading is optional and off by default. When turned on, it copies one strategy that has
+already shown a profitable simulated track record.
 
-## Requirements
+## Why it works this way
 
-- Node.js **18+** (https://nodejs.org/en)
-- npm (comes with Node)
+A 5-minute Up/Down round asks: *will the Chainlink BTC/USD price at the end be ≥ the price at the
+start?* With `S` the current Chainlink price, `K` the price to beat, `τ` the seconds left and `σ`
+recent volatility, the fair probability is
 
-
-## Run from terminal (step-by-step)
-
-### 1) Clone the repository
-
-```bash
-git clone https://github.com/FrondEnt/PolymarketBTC15mAssistant.git
+```
+P(UP) = Φ( ln(S/K) / (σ·√τ) )
 ```
 
-Alternative (no git):
+The market already prices most of this. A small edge can come from two places:
 
-- Click the green `<> Code` button on GitHub
-- Choose `Download ZIP`
-- Extract the ZIP
-- Open a terminal in the extracted project folder
+- **Being a little better calibrated than the crowd**, especially late in the round when the
+  answer is nearly decided.
+- **Reacting faster**, because Binance usually moves slightly before the aggregated Chainlink
+  price.
 
-Then open a terminal in the project folder.
+The aim is **many small positive-expectation bets**, sized with fractional Kelly, placed only
+when the edge after **fees and spread** is large enough. Polymarket charges takers
+`shares × 0.07 × p × (1 − p)` on these markets; makers pay nothing.
 
-### 2) Install dependencies
+## Components
+
+| Piece | File | What it does |
+|---|---|---|
+| Feeds | `src/data/chainlinkFeed.js`, `binanceWs.js`, `polymarket.js` | Chainlink (the settlement feed), Binance trades, order books, and official outcomes from Gamma |
+| Market state | `src/sim/marketState.js` | Price-to-beat latch, volatility, Binance–Chainlink lead, staleness checks |
+| Strategies | `src/strategy/strategies.js`, `decide.js` | Preset strategies from safe to risky; fee-aware entry and Kelly sizing |
+| Learner | `src/strategy/learner.js` | Online logistic model of P(UP), trained on every settled round |
+| Adaptive | `src/strategy/adaptive.js` | Thompson sampling over 36 shadow strategy variants; bets only on variants with a proven edge |
+| Engine | `src/sim/engine.js` | Paper fills (order-book walk, latency, fees, maker queue rules), settlement, P&L, persistence |
+| Recorder / backtest | `src/sim/recording.js`, `src/scripts/backtest.js` | Records raw events and replays them through the same engine |
+
+**Data safety.** Nothing trades unless all of these are true:
+
+- The Chainlink price is under 5 seconds old.
+- The order books are under 3 seconds old.
+- The price to beat was captured from a tick at the round's start.
+- Volatility has warmed up.
+
+Outcomes always come from Polymarket's resolved market. The bot never uses its own price
+comparison. Each round, the captured price to beat is checked against Polymarket's official
+value, and the average difference is shown on screen.
+
+## Strategies
+
+| id | Risk | Idea |
+|---|---|---|
+| `naive-favorite` | control | Buys the favorite about 60s before the end with no edge check. This approximates an average player and is the baseline to beat. |
+| `conservative` | 1 | Uses only the volatility model, buys favorites only, needs a ≥4¢/share edge, stakes at most 3% of bankroll |
+| `maker-patient` | 2 | Places resting bids below fair value, so no fee and no spread, but fills are adverse-selected |
+| `balanced` | 3 | Uses the learned model, needs a ≥2.5¢ edge, 20% Kelly |
+| `aggressive` | 4 | Needs a thin ≥1.5¢ edge, wide entry window, 35% Kelly |
+| `degen` | 5 | Takes almost any positive edge, including long shots. This shows what over-trading costs. |
+| `adaptive` | 3 | Each round, follows whichever shadow variant has the best recent return, measured by its lower confidence bound. Sits out until a variant has proven itself. |
+
+All strategies:
+
+- Settle on the official outcome.
+- Pay the real fee schedule.
+- Fill against the recorded order book after a configurable latency.
+- Never switch sides within a round.
+
+## Running it
 
 ```bash
 npm install
+npm start            # paper-trade every strategy on live data and record it
+npm run dashboard    # http://127.0.0.1:3000 — leaderboard, equity curves, model scorecard
 ```
 
-### 3) (Optional) Set environment variables
+Let it run for a few days. The console and dashboard show equity, ROI, win rate, P&L against
+*expected* P&L, fees, return per dollar staked, and max drawdown for each strategy. They also show
+the learner's out-of-sample log-loss compared with the plain volatility model and the market.
 
-You can run without extra config (defaults are included), but for more stable Chainlink fallback it’s recommended to set at least one Polygon RPC.
+State (bankrolls, the learned model, adaptive statistics) is saved in `logs/sim_state.json` and
+survives restarts. Settled simulated trades are appended to `logs/sim_trades.csv`.
 
-#### Windows PowerShell (current terminal session)
-
-```powershell
-$env:POLYGON_RPC_URL = "https://polygon-rpc.com"
-$env:POLYGON_RPC_URLS = "https://polygon-rpc.com,https://rpc.ankr.com/polygon"
-$env:POLYGON_WSS_URLS = "wss://polygon-bor-rpc.publicnode.com"
-```
-
-Optional Polymarket settings:
-
-```powershell
-$env:POLYMARKET_AUTO_SELECT_LATEST = "true"
-# $env:POLYMARKET_SLUG = "btc-updown-15m-..."   # pin a specific market
-```
-
-#### Windows CMD (current terminal session)
-
-```cmd
-set POLYGON_RPC_URL=https://polygon-rpc.com
-set POLYGON_RPC_URLS=https://polygon-rpc.com,https://rpc.ankr.com/polygon
-set POLYGON_WSS_URLS=wss://polygon-bor-rpc.publicnode.com
-```
-
-Optional Polymarket settings:
-
-```cmd
-set POLYMARKET_AUTO_SELECT_LATEST=true
-REM set POLYMARKET_SLUG=btc-updown-15m-...
-```
-
-Notes:
-- These environment variables apply only to the current terminal window.
-- If you want permanent env vars, set them via Windows System Environment Variables or use a `.env` loader of your choice.
-
-## Configuration
-
-This project reads configuration from environment variables.
-
-You can set them in your shell, or create a `.env` file and load it using your preferred method.
-
-### Polymarket
-
-- `POLYMARKET_AUTO_SELECT_LATEST` (default: `true`)
-  - When `true`, automatically picks the latest 15m market.
-- `POLYMARKET_SERIES_ID` (default: `10191`)
-- `POLYMARKET_SERIES_SLUG` (default: `btc-up-or-down-5m`)
-- `POLYMARKET_SLUG` (optional)
-  - If set, the assistant will target a specific market slug.
-- `POLYMARKET_LIVE_WS_URL` (default: `wss://ws-live-data.polymarket.com`)
-- `POLYMARKET_FUNDER_ADDRESS` or `POLY_FUNDER_ADDRESS` (required for live trading)
-  - Your Polymarket **smart wallet (proxy) address** where USDC is held. Shown in your profile at [polymarket.com/settings](https://polymarket.com/settings). The bot trades from this account; you do not need USDC on your EOA. Your `PRIVATE_KEY` is the key that controls this proxy (e.g. exported from Polymarket).
-
-### Chainlink on Polygon (fallback)
-
-- `CHAINLINK_BTC_USD_AGGREGATOR`
-  - Default: `0xc907E116054Ad103354f2D350FD2514433D57F6f`
-
-HTTP RPC:
-- `POLYGON_RPC_URL` (default: `https://polygon-rpc.com`)
-- `POLYGON_RPC_URLS` (optional, comma-separated)
-  - Example: `https://polygon-rpc.com,https://rpc.ankr.com/polygon`
-
-WSS RPC (optional but recommended for more real-time fallback):
-- `POLYGON_WSS_URL` (optional)
-- `POLYGON_WSS_URLS` (optional, comma-separated)
-
-### Proxy support
-
-The bot supports HTTP(S) proxies for both HTTP requests (fetch) and WebSocket connections.
-
-Supported env vars (standard):
-
-- `HTTPS_PROXY` / `https_proxy`
-- `HTTP_PROXY` / `http_proxy`
-- `ALL_PROXY` / `all_proxy`
-
-Examples:
-
-PowerShell:
-
-```powershell
-$env:HTTPS_PROXY = "http://127.0.0.1:8080"
-# or
-$env:ALL_PROXY = "socks5://127.0.0.1:1080"
-```
-
-CMD:
-
-```cmd
-set HTTPS_PROXY=http://127.0.0.1:8080
-REM or
-set ALL_PROXY=socks5://127.0.0.1:1080
-```
-
-#### Proxy with username + password (simple guide)
-
-1) Take your proxy host and port (example: `1.2.3.4:8080`).
-
-2) Add your login and password in the URL:
-
-- HTTP/HTTPS proxy:
-  - `http://USERNAME:PASSWORD@HOST:PORT`
-- SOCKS5 proxy:
-  - `socks5://USERNAME:PASSWORD@HOST:PORT`
-
-3) Set it in the terminal and run the bot.
-
-PowerShell:
-
-```powershell
-$env:HTTPS_PROXY = "http://USERNAME:PASSWORD@HOST:PORT"
-npm start
-```
-
-CMD:
-
-```cmd
-set HTTPS_PROXY=http://USERNAME:PASSWORD@HOST:PORT
-npm start
-```
-
-Important: if your password contains special characters like `@` or `:` you must URL-encode it.
-
-Example:
-
-- password: `p@ss:word`
-- encoded: `p%40ss%3Aword`
-- proxy URL: `http://user:p%40ss%3Aword@1.2.3.4:8080`
-
-## Run
+### Backtesting on recorded data
 
 ```bash
-npm start
+npm run backtest                                         # all of logs/recordings
+npm run backtest -- --from 2026-09-01 --to 2026-09-07
+npm run backtest -- --bankroll 50 --latency 1000 --strategies conservative,balanced,adaptive
+npm run report -- --file logs/backtests/<run>/trades.csv # breakdown by price, timing, side, hour
 ```
+
+Outcomes are injected 60 seconds after each round ends, in time order, so the learner and the
+adaptive selector never see the future. Change `--latency` to test how sensitive a strategy is to
+execution speed.
 
 ### Tests
 
 ```bash
-npm run test:trading
+npm test
 ```
 
-Runs lightweight checks for the relayer/smart-wallet trading flow (e.g. skipped when funder is missing, balance null when funder unset). Uses env with `ENABLE_LIVE_TRADING=true`, a dummy `PRIVATE_KEY`, and no `POLYMARKET_FUNDER_ADDRESS`.
+The suite includes synthetic markets that check three things:
 
-### Stop
+- Strategies profit when the market is genuinely mispriced.
+- The conservative strategy stays out and the naive control loses to fees when the market is
+  efficient.
+- The books balance exactly.
 
-Press `Ctrl + C` in the terminal.
+## Going live (carefully)
 
-### Simulation mode and indicator logs
+1. Paper-trade until the strategy you want has at least `LIVE_MIN_SIM_BETS` settled bets with
+   positive P&L. The executor enforces this.
+2. Set `ENABLE_LIVE_TRADING=true`, `LIVE_STRATEGY=<id>`, `PRIVATE_KEY` and
+   `POLYMARKET_FUNDER_ADDRESS`.
+3. Keep `MAX_LIVE_STAKE_USD` small and set `DAILY_LOSS_LIMIT_USD`.
 
-- Keep `ENABLE_LIVE_TRADING=false` (default) to run in simulation mode.
-- The bot logs GPT indicator scores/confidence over time to `logs/gpt_indicators.csv`.
-- Existing model/trade logs continue in `logs/signals.csv` and `logs/simulated_trades.csv`.
+Live orders are FAK market buys whose worst price is the highest price that still clears the
+strategy's minimum edge after fees. Only taker strategies can be copied live.
 
-### Update to latest version
+Things the simulation cannot capture:
 
-```bash
-git pull
-npm install
-npm start
-```
+- **Queue position** for maker orders. The fill rule is conservative.
+- **Competition for the same liquidity.** Each strategy fills against the full book
+  independently.
+- **Your own market impact** beyond walking the recorded book.
+- **The minimum order size.** Polymarket's minimum is 5 shares, so the smallest bet is about
+  5 × price.
 
-## Notes / Troubleshooting
+## Requirements
 
-- If you see no Chainlink updates:
-  - Polymarket WS might be temporarily unavailable. The bot falls back to Chainlink on-chain price via Polygon RPC.
-  - Ensure at least one working Polygon RPC URL is configured.
-- If the console looks like it “spams” lines:
-  - The renderer uses `readline.cursorTo` + `clearScreenDown` for a stable, static screen, but some terminals may still behave differently.
-
-## Live trading (smart wallet)
-
-The bot trades via Polymarket’s CLOB using your **smart wallet (proxy)**. USDC should be in your Polymarket account (the address you see at polymarket.com/settings), not on the EOA derived from `PRIVATE_KEY`. Set `POLYMARKET_FUNDER_ADDRESS` (or `POLY_FUNDER_ADDRESS`) to that proxy address. You do not need POL for gas; the exchange settles from your proxy.
-
-**Migration from EOA-only:** Previously, the bot could use an EOA and expected USDC on that address. It now uses the proxy (signature type GNOSIS_SAFE) by default when `POLYMARKET_FUNDER_ADDRESS` is set. Ensure your private key is the one that controls the proxy (e.g. exported from Polymarket).
-
-## Safety
-
-This is not financial advice. Use at your own risk.
-
-created by @krajekis
+- Node.js 18+ (tested on 22)
+- For running on a server under PM2, see [quickstart.md](quickstart.md)

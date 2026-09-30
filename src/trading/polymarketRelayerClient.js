@@ -464,9 +464,15 @@ export async function placeMarketOrder({ tokenId, side, amountUsd, worstPrice, t
       rawResponse: response
     });
 
+    if (response && response.success === false) {
+      return { error: response.errorMsg || response.error || "order_rejected" };
+    }
     return {
       orderID: summary.orderID,
-      status: summary.status ?? "ok"
+      status: summary.status ?? "ok",
+      // For a BUY: makingAmount = USDC spent, takingAmount = shares received.
+      makingAmount: Number(response?.makingAmount) || null,
+      takingAmount: Number(response?.takingAmount) || null
     };
   } catch (err) {
     if (CONFIG.trading.debugLiveTrading) {

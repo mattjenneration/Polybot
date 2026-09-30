@@ -6,8 +6,9 @@
   "scripts": {
     "start": "node src/index.js",
     "dashboard": "node src/server.js",
-    "report:sim": "node src/scripts/postRunScenarioReport.js",
-    "report:sim:24h": "node src/scripts/postRunScenarioReport.js --hours 24",
+    "backtest": "node src/scripts/backtest.js",
+    "report": "node src/scripts/report.js",
+    "test": "node --test test/*.test.js",
     "pm2:start": "pm2 start ecosystem.config.cjs",
     "pm2:stop": "pm2 stop ecosystem.config.cjs",
     "pm2:restart": "pm2 restart ecosystem.config.cjs",

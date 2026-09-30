@@ -1,134 +1,103 @@
+function envNum(name, fallback, min = -Infinity, max = Infinity) {
+  const raw = process.env[name];
+  const n = raw === undefined || raw === "" ? fallback : Number(raw);
+  const v = Number.isFinite(n) ? n : fallback;
+  return Math.max(min, Math.min(max, v));
+}
+
+function envBool(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  return raw.toLowerCase() === "true";
+}
+
+function envList(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
 export const CONFIG = {
-  symbol: "BTCUSDT",
-  binanceBaseUrl: "https://api.binance.com",
   gammaBaseUrl: "https://gamma-api.polymarket.com",
   clobBaseUrl: "https://clob.polymarket.com",
-
-  pollIntervalMs: 2_000,
-  candleWindowMinutes: 5,
-  /** How much auxiliary futures + microstructure (-100..100) adds to TA confidence. */
-  confidenceAuxiliaryWeight: Math.max(0, Math.min(0.45, Number(process.env.CONFIDENCE_AUXILIARY_WEIGHT ?? "0.22"))),
-
-  vwapSlopeLookbackMinutes: 5,
-  rsiPeriod: 14,
-  rsiMaPeriod: 14,
-
-  macdFast: 12,
-  macdSlow: 26,
-  macdSignal: 9,
+  binanceSymbol: (process.env.BINANCE_SYMBOL || "btcusdt").toLowerCase(),
 
   polymarket: {
     marketSlug: process.env.POLYMARKET_SLUG || "",
     seriesId: process.env.POLYMARKET_SERIES_ID || "10684",
-    seriesSlug: process.env.POLYMARKET_SERIES_SLUG || "btc-up-or-down-5m",
-    autoSelectLatest: (process.env.POLYMARKET_AUTO_SELECT_LATEST || "true").toLowerCase() === "true",
+    autoSelectLatest: envBool("POLYMARKET_AUTO_SELECT_LATEST", true),
     liveDataWsUrl: process.env.POLYMARKET_LIVE_WS_URL || "wss://ws-live-data.polymarket.com",
     upOutcomeLabel: process.env.POLYMARKET_UP_LABEL || "Up",
     downOutcomeLabel: process.env.POLYMARKET_DOWN_LABEL || "Down",
     funderAddress: (process.env.POLYMARKET_FUNDER_ADDRESS || process.env.POLY_FUNDER_ADDRESS || "").trim(),
     // 0 = EOA, 1 = POLY_PROXY, 2 = GNOSIS_SAFE (see Polymarket docs)
-    signatureType: Number(process.env.POLY_SIGNATURE_TYPE ?? "2"),
-    /** Rolling PolySwings sample log; same 1h window as in-memory store. Set POLYSWINGS_CSV=false to disable. */
-    polySwingsCsvEnabled: (process.env.POLYSWINGS_CSV ?? "true").toLowerCase() !== "false",
-    polySwingsCsvPath: process.env.POLYSWINGS_CSV_PATH || "./logs/polyswings_samples.csv"
+    signatureType: envNum("POLY_SIGNATURE_TYPE", 2)
   },
 
   chainlink: {
-    polygonRpcUrls: (process.env.POLYGON_RPC_URLS || "").split(",").map((s) => s.trim()).filter(Boolean),
-    polygonRpcUrl: process.env.POLYGON_RPC_URL || "https://rpc.ankr.com/polygon",
-    polygonWssUrls: (process.env.POLYGON_WSS_URLS || "").split(",").map((s) => s.trim()).filter(Boolean),
-    polygonWssUrl: process.env.POLYGON_WSS_URL || "",
-    btcUsdAggregator: process.env.CHAINLINK_BTC_USD_AGGREGATOR || "0xc907E116054Ad103354f2D350FD2514433D57F6f"
+    // Only used by the live-order client (ethers provider for balance reads).
+    polygonRpcUrl: process.env.POLYGON_RPC_URL || "https://polygon-rpc.com"
+  },
+
+  loop: {
+    tickMs: envNum("TICK_MS", 1000, 250, 10_000),
+    bookPollMs: envNum("BOOK_POLL_MS", 1000, 250, 10_000),
+    marketPollMs: envNum("MARKET_POLL_MS", 5000, 1000, 60_000)
+  },
+
+  feeds: {
+    // Any price older than this is treated as missing: no decisions are made on stale data.
+    maxChainlinkAgeMs: envNum("MAX_CHAINLINK_AGE_MS", 5000, 500, 60_000),
+    maxBinanceAgeMs: envNum("MAX_BINANCE_AGE_MS", 3000, 500, 60_000),
+    maxBookAgeMs: envNum("MAX_BOOK_AGE_MS", 3000, 500, 60_000)
+  },
+
+  rounds: {
+    // Price-to-beat is latched from the first Chainlink tick stamped within this many ms after the round start.
+    ptbLatchToleranceMs: envNum("PTB_LATCH_TOLERANCE_MS", 3000, 0, 30_000),
+    resolutionPollMs: envNum("RESOLUTION_POLL_MS", 15_000, 2000, 300_000),
+    resolutionGiveUpMs: envNum("RESOLUTION_GIVE_UP_MS", 3 * 3600_000, 60_000, 48 * 3600_000)
+  },
+
+  sim: {
+    startingBankrollUsd: envNum("SIM_BANKROLL_USD", 100, 1, 1e9),
+    // Taker orders fill against the first book snapshot at least this long after the decision.
+    latencyMs: envNum("SIM_LATENCY_MS", 400, 0, 10_000),
+    // Comma-separated strategy ids, or "all".
+    strategies: envList("SIM_STRATEGIES", ["all"]),
+    stateFile: process.env.SIM_STATE_FILE || "./logs/sim_state.json",
+    tradesCsv: process.env.SIM_TRADES_CSV || "./logs/sim_trades.csv",
+    record: envBool("RECORD_DATA", true),
+    recordingsDir: process.env.RECORDINGS_DIR || "./logs/recordings",
+    bookDepth: envNum("BOOK_DEPTH", 10, 1, 50)
+  },
+
+  learner: {
+    learningRate: envNum("LEARNER_LR", 0.05, 0.0001, 1),
+    l2: envNum("LEARNER_L2", 0.01, 0, 1),
+    // One training sample per round per this many seconds of the decision window.
+    sampleEverySec: envNum("LEARNER_SAMPLE_EVERY_SEC", 15, 1, 300),
+    sampleWindowSec: envNum("LEARNER_SAMPLE_WINDOW_SEC", 240, 10, 300)
   },
 
   trading: {
-    timeframe: process.env.BOT_TIMEFRAME || "5m",
-    tradeThreshold: Number(process.env.TRADE_THRESHOLD ?? "75"),
-    positionSizeUsd: Number(process.env.POSITION_SIZE_USD ?? "10"),
-    riskAppetite: Math.max(0, Math.min(1, Number(process.env.RISK_APPETITE ?? "0.5"))),
-    riskAppetiteStep: Math.max(0, Math.min(0.5, Number(process.env.RISK_APPETITE_STEP ?? "0.2"))),
-    cooldownMinutes: Number(process.env.COOLDOWN_MINUTES ?? "15"),
-    enableLiveTrading: (process.env.ENABLE_LIVE_TRADING || "false").toLowerCase() === "true",
+    enableLiveTrading: envBool("ENABLE_LIVE_TRADING", false),
+    // Which simulated strategy the live bot mirrors (see src/strategy/strategies.js).
+    liveStrategy: process.env.LIVE_STRATEGY || "conservative",
+    // Hard caps for live orders, independent of the strategy's own sizing.
+    maxLiveStakeUsd: envNum("MAX_LIVE_STAKE_USD", 5, 1, 10_000),
+    dailyLossLimitUsd: envNum("DAILY_LOSS_LIMIT_USD", 25, 0, 1e9),
+    // Live mirroring only starts once the strategy has this many settled sim bets with positive P&L.
+    liveMinSimBets: envNum("LIVE_MIN_SIM_BETS", 200, 0, 1e6),
     privateKey: process.env.PRIVATE_KEY || "",
     usdcAddress: process.env.USDC_ADDRESS || "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
     chainId: 137,
-    simBudgetUsd: Number(process.env.BUDGET_USD ?? "0"),
-    simBetAmountUsd: Number(process.env.BET_AMOUNT_USD ?? "0"),
-    debugLiveTrading: (process.env.DEBUG_LIVE_TRADING || "false").toLowerCase() === "true",
-    // Market order type: FAK = fill what's available (partial ok), FOK = fill entire amount or cancel
-    marketOrderType: (process.env.MARKET_ORDER_TYPE || "FAK").toUpperCase() === "FOK" ? "FOK" : "FAK",
-    // Slippage for market orders: fraction (e.g. 0.03 = 3%) added to best ask for worst-price limit
-    marketOrderSlippagePct: Math.max(0, Math.min(0.5, Number(process.env.MARKET_ORDER_SLIPPAGE_PCT ?? "0.03"))),
-    // Default max price we're willing to pay for a share.
-    maxBidPrice: Math.max(0.01, Math.min(0.99, Number(process.env.MAX_BID_PRICE ?? "0.95"))),
-    // Confidence-to-max-price ladder.
-    // Format example: "0:0.70,20:0.80,40:0.88,60:0.93,80:0.97"
-    // Uses absolute confidence score (0..100), picks highest threshold <= current confidence.
-    confidenceMaxBidLadder: (() => {
-      const raw = String(process.env.CONFIDENCE_MAX_BID_LADDER ?? "");
-      if (!raw.trim()) return [];
-      const pairs = raw
-        .split(",")
-        .map((part) => part.trim())
-        .filter(Boolean)
-        .map((part) => {
-          const [thresholdRaw, priceRaw] = part.split(":").map((s) => s.trim());
-          const threshold = Number(thresholdRaw);
-          const price = Number(priceRaw);
-          if (!Number.isFinite(threshold) || !Number.isFinite(price)) return null;
-          return {
-            threshold: Math.max(0, Math.min(100, Math.round(threshold))),
-            maxPrice: Math.max(0.01, Math.min(0.99, price))
-          };
-        })
-        .filter(Boolean)
-        .sort((a, b) => a.threshold - b.threshold);
-      return pairs;
-    })(),
-    // Entry timing for live orders: place trade when remaining seconds is <= this value.
-    tradeTimingSeconds: Math.max(0, Number(process.env.TRADE_TIMING_SECONDS ?? "60")),
-    // Minimum model − market edge on the traded side (0–1). Stricter than display-only `decide()` in quiet regimes.
-    liveMinModelEdge: Math.max(0, Math.min(0.5, Number(process.env.LIVE_MIN_MODEL_EDGE ?? "0.10"))),
-    // Skip live bids when the ask is in this band (market is pricing ~50/50).
-    coinFlipMinPrice: (() => {
-      const a = Math.max(0.01, Math.min(0.99, Number(process.env.COIN_FLIP_MIN_PRICE ?? "0.42")));
-      const b = Math.max(0.01, Math.min(0.99, Number(process.env.COIN_FLIP_MAX_PRICE ?? "0.58")));
-      return Math.min(a, b);
-    })(),
-    coinFlipMaxPrice: (() => {
-      const a = Math.max(0.01, Math.min(0.99, Number(process.env.COIN_FLIP_MIN_PRICE ?? "0.42")));
-      const b = Math.max(0.01, Math.min(0.99, Number(process.env.COIN_FLIP_MAX_PRICE ?? "0.58")));
-      return Math.max(a, b);
-    })(),
-    // Extra |confidence| required for DOWN live trades (logs showed weaker DOWN fills).
-    downSideExtraThreshold: Math.max(0, Math.min(40, Number(process.env.DOWN_SIDE_EXTRA_THRESHOLD ?? "12"))),
-    // Mean |Δconfidence| over chopWindowMs; above this → skip (whipsaw).
-    maxConfidenceSwingMeanAbs: Math.max(0, Math.min(100, Number(process.env.MAX_CONFIDENCE_SWING_MEAN_ABS ?? "22"))),
-    chopWindowMs: Math.max(5_000, Math.min(120_000, Number(process.env.CHOP_WINDOW_MS ?? "30000"))),
-    // After this many live fills, if win rate < min, pause new bids for pauseMinutes.
-    circuitBreakerWindow: Math.max(3, Math.min(30, Number(process.env.CIRCUIT_BREAKER_WINDOW ?? "8"))),
-    circuitBreakerMinTrades: Math.max(2, Math.min(25, Number(process.env.CIRCUIT_BREAKER_MIN_TRADES ?? "6"))),
-    circuitBreakerMinWinRate: Math.max(0, Math.min(1, Number(process.env.CIRCUIT_BREAKER_MIN_WIN_RATE ?? "0.45"))),
-    circuitBreakerPauseMinutes: Math.max(1, Math.min(240, Number(process.env.CIRCUIT_BREAKER_PAUSE_MINUTES ?? "45"))),
-    circuitBreakerEnabled: (process.env.CIRCUIT_BREAKER_ENABLED ?? "true").toLowerCase() !== "false",
-    // Throttle high-volume CSV logs (signals + gpt_indicators).
-    logSignalsThrottleMs: Math.max(0, Number(process.env.LOG_SIGNALS_THROTTLE_MS ?? "30000")),
-    // Fewer terminal lines (keeps confidence, market, budget, key hints).
-    quietConsole: (process.env.QUIET_CONSOLE ?? "false").toLowerCase() === "true",
-    // Require `decide()` ENTER + same side as confidence (anti–coin-flip discipline).
-    requireEdgeEngineEnter: (process.env.REQUIRE_EDGE_ENGINE_ENTER ?? "true").toLowerCase() !== "false",
-    enforceCoinFlipGuard: (process.env.ENFORCE_COIN_FLIP_GUARD ?? "true").toLowerCase() !== "false",
-    enforceChopGuard: (process.env.ENFORCE_CHOP_GUARD ?? "true").toLowerCase() !== "false",
-    // Checkpoints (seconds remaining) for recording model prediction outcomes.
-    predictionCheckpointsSeconds: (() => {
-      const raw = String(process.env.PREDICTION_TIMINGS_SECONDS ?? "120,90,60");
-      const parsed = raw
-        .split(",")
-        .map((s) => Number(s.trim()))
-        .filter((n) => Number.isFinite(n) && n > 0)
-        .map((n) => Math.round(n));
-      const unique = [...new Set(parsed)].sort((a, b) => b - a);
-      return unique.length ? unique : [120, 90, 60];
-    })()
+    debugLiveTrading: envBool("DEBUG_LIVE_TRADING", false),
+    // FAK = fill what's available (partial ok), FOK = fill entire amount or cancel
+    marketOrderType: (process.env.MARKET_ORDER_TYPE || "FAK").toUpperCase() === "FOK" ? "FOK" : "FAK"
+  },
+
+  console: {
+    quiet: envBool("QUIET_CONSOLE", false)
   }
 };
