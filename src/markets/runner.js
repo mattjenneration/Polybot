@@ -198,7 +198,9 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run when executed directly (node / npm) or under pm2, whose wrapper replaces argv[1] with its own path.
+const entryPath = process.env.pm_exec_path || process.argv[1];
+if (entryPath && import.meta.url === pathToFileURL(entryPath).href) {
   main().catch((err) => {
     console.error("[markets] fatal:", errorToRedactedLogString(err));
     process.exit(1);
