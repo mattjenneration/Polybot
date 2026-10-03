@@ -18,6 +18,22 @@ const apps = [
     }
   },
   {
+    name: "markets-sim",
+    script: path.join(__dirname, "src/markets/runner.js"),
+    cwd: __dirname,
+    instances: 1,
+    autorestart: true,
+    watch: false,
+    max_memory_restart: "400M",
+    error_file: path.join(__dirname, "logs/pm2-markets-sim-error.log"),
+    out_file: path.join(__dirname, "logs/pm2-markets-sim-out.log"),
+    merge_logs: true,
+    time: true,
+    env: {
+      NODE_ENV: "production"
+    }
+  },
+  {
     name: "btc-dashboard",
     script: path.join(__dirname, "src/server.js"),
     cwd: __dirname,

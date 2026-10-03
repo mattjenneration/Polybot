@@ -103,6 +103,37 @@ app.post("/api/sim-reset", (req, res) => {
   }
 });
 
+// Multi-market paper sim (src/markets/runner.js) — read-only view of its state file.
+app.get("/api/markets-sim", (req, res) => {
+  const file = path.join(LOG_DIR, "markets_state.json");
+  if (!fs.existsSync(file)) return res.json({ ok: true, running: false, modules: [], positions: [] });
+  try {
+    const st = JSON.parse(fs.readFileSync(file, "utf8"));
+    const mtimeMs = fs.statSync(file).mtimeMs;
+    const positions = Array.isArray(st.positions) ? st.positions : [];
+    const watch = Object.values(st.watch ?? {});
+    const modules = Object.entries(st.modules ?? {}).map(([name, m]) => {
+      const open = positions.filter((p) => p.module === name);
+      return {
+        name,
+        ...m,
+        openPositions: open.length,
+        openExposureUsd: open.reduce((a, p) => a + (Number(p.totalUsd) || 0), 0),
+        watching: watch.filter((w) => w.module === name).length
+      };
+    });
+    res.json({
+      ok: true,
+      running: Date.now() - mtimeMs < 5 * 60_000,
+      updatedAt: new Date(mtimeMs).toISOString(),
+      modules,
+      positions: positions.slice(-40).reverse()
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
 const HOST = process.env.DASHBOARD_HOST || "127.0.0.1";
 app.listen(PORT, HOST, () => {
   console.log(`Dashboard: http://${HOST}:${PORT}/  (logs: ${LOG_DIR})`);

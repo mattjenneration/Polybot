@@ -131,6 +131,25 @@ Things the simulation cannot capture:
 - **The minimum order size.** Polymarket's minimum is 5 shares, so the smallest bet is about
   5 × price.
 
+## Other-markets simulator (crypto ladders + weather)
+
+A second paper-trading process runs next to the BTC 5m bot to find out which market we can actually beat:
+
+- **Crypto price ladders.** These are "Bitcoin above $X on <date>", "between $X and $Y", "reach $X in October" and hourly/daily Up or Down markets for BTC/ETH/SOL/XRP. They're priced off the Deribit options implied-vol surface (falling back to Binance realized vol) and Binance spot.
+- **Weather.** These are "Highest temperature in <city> on <date>" buckets. They're priced from Open-Meteo ensemble members (ECMWF + GFS + ICON) for the hours still to come. That forecast is floored by and bias-corrected against live METAR observations at the resolution airport station.
+
+Each loop discovers markets on Gamma and computes a model probability. It logs a calibration snapshot, then paper-buys the YES/NO side whose ask plus taker fee sits at least `*_MIN_EDGE` below the model. Fills walk the real CLOB book. Positions settle from Gamma resolutions.
+
+```bash
+npm run sim:markets                 # foreground
+npm run pm2:start                   # runs btc-assistant + markets-sim + dashboard
+npm run report:markets -- --hours 24
+```
+
+The report compares all three markets after fees. It also scores the model against the market's own price (Brier score) on resolved markets. If the model doesn't beat the market's Brier score, any profit is luck. Logs go to `logs/markets_*.csv`, and state goes to `logs/markets_state.json`, which survives restarts. The dashboard shows a "markets sim" panel. Settings are listed in `.env.example`.
+
+Required outbound hosts: `gamma-api.polymarket.com`, `clob.polymarket.com`, `www.deribit.com`, `api.binance.com`, `ensemble-api.open-meteo.com` and `aviationweather.gov`.
+
 ## Requirements
 
 - Node.js 18+ (tested on 22)

@@ -102,6 +102,11 @@
       <h2>Recent simulated trades</h2>
       <div class="scroll"><table id="trades"></table></div>
     </section>
+    <section class="panel wide" id="msim-panel" hidden>
+      <h2>Other markets sim (ladders + weather) · <span id="msim-status">—</span></h2>
+      <div class="scroll"><table id="msim-modules"></table></div>
+      <div class="scroll" style="margin-top:10px"><table id="msim-positions"></table></div>
+    </section>
   </div>
 </main>
 
@@ -222,6 +227,32 @@ async function refresh() {
   }
 }
 
+async function refreshMarketsSim() {
+  try {
+    const j = await (await fetch("/api/markets-sim")).json();
+    const panel = $("msim-panel");
+    if (!j.ok || !j.modules || !j.modules.length) { panel.hidden = true; return; }
+    panel.hidden = false;
+    $("msim-status").innerHTML = `<span class="pill ${j.running ? "ok" : "wait"}">${j.running ? "running" : "stale"}</span> updated ${new Date(j.updatedAt).toLocaleTimeString()}`;
+    $("msim-modules").innerHTML = `<tr><th>Module</th><th>Realized P&amp;L</th><th>Fees</th><th>Balance</th><th>Settled</th><th>Win</th><th>Open</th><th>Exposure</th><th>Watching</th></tr>` +
+      j.modules.map((m) => {
+        const pnl = Number(m.realizedPnlUsd || 0);
+        const winRate = m.settled ? pct(m.wins / m.settled, 0) : "–";
+        return `<tr><td>${esc(m.name)}</td><td>${signed(money(pnl), pnl)}</td><td>${money(Number(m.feesUsd || 0))}</td><td>${money(Number(m.balanceUsd || 0))}</td>
+          <td>${m.settled ?? 0}</td><td>${winRate}</td><td>${m.openPositions}</td><td>${money(Number(m.openExposureUsd || 0))}</td><td>${m.watching}</td></tr>`;
+      }).join("");
+    const positions = j.positions || [];
+    $("msim-positions").innerHTML = positions.length
+      ? `<tr><th>Module</th><th>Market</th><th>Side</th><th>Model</th><th>Avg</th><th>Edge</th><th>Spent</th><th>Expires</th></tr>` +
+        positions.map((p) => `<tr><td>${esc(p.module)}</td><td class="reason">${esc(p.question)}</td><td>${esc(p.side)}</td><td>${pct(Number(p.pModel))}</td>
+          <td>${Number(p.avgPrice).toFixed(3)}</td><td>${(Number(p.edge) * 100).toFixed(1)}pp</td><td>${money(Number(p.totalUsd))}</td>
+          <td>${p.expiryMs ? new Date(p.expiryMs).toLocaleString() : "–"}</td></tr>`).join("")
+      : '<tr><td class="empty">No open positions.</td></tr>';
+  } catch {
+    // dashboard stays usable without the markets sim
+  }
+}
+
 $("reset").addEventListener("click", async () => {
   if (!confirm("Reset every simulated bankroll to its starting value? Learned models are kept.")) return;
   const r = await fetch("/api/sim-reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
@@ -232,6 +263,8 @@ refresh();
 refreshTrades();
 setInterval(refresh, 2000);
 setInterval(refreshTrades, 15000);
+refreshMarketsSim();
+setInterval(refreshMarketsSim, 15000);
 </script>
 </body>
 </html>
