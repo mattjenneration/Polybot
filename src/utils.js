@@ -5,6 +5,10 @@ export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export function ensureDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
+}
+
 export function formatCsvRow(row) {
   return row
     .map((v) => {
@@ -19,7 +23,7 @@ export function formatCsvRow(row) {
 }
 
 export function appendCsvRow(filePath, header, row) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  ensureDir(path.dirname(filePath));
   const line = formatCsvRow(row);
   if (!fs.existsSync(filePath)) {
     fs.writeFileSync(filePath, `${header.join(",")}\n${line}\n`, "utf8");
