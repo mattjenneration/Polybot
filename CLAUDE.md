@@ -16,6 +16,10 @@ npm run test:trading      # node:test suite for the trading path (sets dummy env
 npm run report:sim        # summarize simulation CSVs; report:sim:24h limits to last 24h
 node src/index.js --api-log [--limit N] [--trades-only]   # print logs/api.log as a table and exit
 npm run pm2:start         # run bot + dashboard under PM2 (ecosystem.config.cjs)
+npm run sim:weather       # weather (temperature markets) paper trader; dashboard at /weather.html
+npm run report:weather    # weather leaderboard + learning summary + go-live checklist
+npm run weather:backfill  # seed forecast skill from history (also runs automatically per new station)
+node --test src/weather/weather.test.js   # weather suite (unit + mocked end-to-end)
 ```
 
 Run a single test file directly with `node --test <file>`, but the trading test needs the env vars from the `test:trading` script (`ENABLE_LIVE_TRADING=true`, dummy `PRIVATE_KEY`, empty funder address). Filter within a file with `--test-name-pattern`.
@@ -46,3 +50,16 @@ Configuration is entirely env-driven (`.env` loaded via `dotenv/config`); `.env.
 - CSV logs are appended via `appendCsvRow` in `src/utils.js`; headers are written once, so adding a column to an existing CSV needs a fresh file (or migration) to stay parseable by `server.js`.
 - `src/index.js` is large (~1700 lines) and holds TUI rendering, market resolution, price-to-beat parsing, and decision telemetry alongside the main loop; search it rather than assuming logic lives in a module.
 - `QUIET_CONSOLE=true` reduces TUI output (useful headless/over SSH). `quickstart.md` documents EC2 + PM2 deployment.
+
+## Weather trader (`src/weather/`)
+
+Separate process (`runner.js`, pm2 app `weather-sim`) paper-trading Polymarket daily high/low temperature markets in learning mode. All state and logs live in `WEATHER_LOG_DIR` (default `logs/weather/`); `server.js` exposes them at `/api/weather*` and `src/weather.html`.
+
+- Pipeline per 30s tick: `events.js` (Gamma, tag `daily-temperature`) → `sources/` (METAR, HKO, Open-Meteo, IEM) → `model/forecast.js` (per-model debias, blend, nowcast, ensemble, obs floor/ceiling) → `model/market.js` → `model/calibrator.js` (log opinion pool of model vs market) → `engine.js` (strategies + 96 shadow variants, fills, settlement) → learners in `strategy/learning.js` and `model/skill.js`.
+- Resolution facts the code depends on: METAR stations round the local-day extreme of routine+special reports; Hong Kong (HKO) truncates 0.1 °C values (`rule: "floor"`); markets trade past Gamma `endDate` through the target day, so discovery uses `end_date_min = now − 4 days`, never `now`.
+- NO order books are derived from YES books (`mirrorBook`); only YES books are fetched.
+- aviationweather.gov truncates responses at 400 reports — `fetchMetars` splits batches; don't raise batch sizes for deep (30h) polls.
+- Skill errors are stored in °C (°F ÷ 1.8) so stations pool; `forecast.js` converts back with `fromC`.
+- Stations without history stay untradeable (`awaiting_backfill`) until backfilled or 40 live samples exist — raw models are 1–2 °C cold-biased on highs.
+- Learning samples are one per *event*, not per bet (buckets of an event share one outcome).
+

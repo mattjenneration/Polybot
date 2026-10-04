@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Weather Trader</title>
+  <style>
+    :root {
+      --bg: #f6f7f9; --panel: #ffffff; --ink: #14171c; --muted: #636b78; --line: #e3e6eb;
+      --up: #0f8a5f; --down: #c2413b; --accent: #2f5bd3; --warn: #b7791f; --mkt: #8a93a1;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0d1014; --panel: #151a20; --ink: #e8ebf0; --muted: #8a93a1; --line: #252c35; --up: #34c38f; --down: #f06a62; --accent: #7c9cff; --warn: #e5a93b; --mkt: #6b7480; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    main { max-width: 1240px; margin: 0 auto; padding: 20px 16px 48px; }
+    h1 { font-size: 20px; margin: 0; }
+    h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+    a { color: var(--accent); }
+    .sub { color: var(--muted); font-size: 13px; }
+    .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-top: 14px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+    .wide { grid-column: 1 / -1; }
+    .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-variant-numeric: tabular-nums; }
+    .kv > span:nth-child(odd) { color: var(--muted); }
+    .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .ok { background: color-mix(in srgb, var(--up) 18%, transparent); color: var(--up); }
+    .wait { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+    .bad { background: color-mix(in srgb, var(--down) 18%, transparent); color: var(--down); }
+    .neutral { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); }
+    .pos { color: var(--up); } .neg { color: var(--down); }
+    .scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+    th { color: var(--muted); font-weight: 600; font-size: 12px; }
+    th:first-child, td:first-child { text-align: left; }
+    td.l, th.l { text-align: left; }
+    td.reason { text-align: left; color: var(--muted); white-space: normal; min-width: 160px; }
+    tr.ev { cursor: pointer; }
+    tr.ev:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+    tr.detail td { background: color-mix(in srgb, var(--muted) 5%, transparent); }
+    .legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--muted); margin-top: 6px; }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+    button, select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; font: inherit; }
+    button:hover, select:hover { border-color: var(--accent); }
+    header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; align-items: flex-end; }
+    .empty { color: var(--muted); padding: 10px 0; }
+    .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .dist { display: grid; grid-template-columns: 110px 1fr; gap: 3px 10px; align-items: center; font-size: 12px; max-width: 760px; }
+    .bars { display: grid; gap: 2px; }
+    .bars div { height: 6px; border-radius: 3px; min-width: 1px; }
+    .b-wx { background: var(--accent); } .b-mkt { background: var(--mkt); } .b-fin { background: var(--up); }
+    svg text { fill: var(--muted); font-size: 11px; }
+    .big { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .stats { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 10px; }
+    .stats > div { min-width: 110px; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Weather Trader</h1>
+      <div class="sub">Paper trading Polymarket daily high/low temperature markets · <span id="mode">—</span> · <span id="updated">waiting for weather-sim…</span></div>
+    </div>
+    <div class="sub"><a href="/">BTC 5m lab</a> · <button id="reset" type="button">Reset paper bankrolls</button></div>
+  </header>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>Learning progress</h2>
+      <div class="stats">
+        <div><div class="big" id="settled">—</div><div class="sub">events settled</div></div>
+        <div><div class="big" id="proven">—</div><div class="sub">variants proven</div></div>
+        <div><div class="big" id="datacheck">—</div><div class="sub">obs → official bucket</div></div>
+      </div>
+      <div class="kv" id="statusKv"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Model vs market <span class="sub">(log loss per event, lower is better)</span></h2>
+      <div class="scroll"><table id="scorecard"></table></div>
+      <div class="note" id="weights"></div>
+    </section>
+
+    <section class="panel">
+      <h2>When to bid <span class="sub">(timing windows)</span></h2>
+      <div class="scroll"><table id="windows"></table></div>
+      <div class="note">Pooled return per $ of every shadow bet placed in each window, one sample per settled event.</div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Strategies · safe → risky</h2>
+      <div class="scroll"><table id="leaderboard"></table></div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Equity by strategy</h2>
+      <div id="equity"></div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Which cities <span class="sub">(learned allocation)</span></h2>
+      <div class="scroll"><table id="cities"></table></div>
+      <div class="note">Multiplier scales the learning strategy's stakes: 0 = avoid, 1 = neutral, up to 2 = favour. Cities stay neutral until they have enough settled events.</div>
+    </section>
+
+    <section class="panel">
+      <h2>Top strategy variants</h2>
+      <div class="scroll"><table id="variants"></table></div>
+    </section>
+
+    <section class="panel">
+      <h2>Best bid <span class="sub">(maker fill rates)</span></h2>
+      <div class="scroll"><table id="fills"></table></div>
+      <div class="note">P(a resting bid fills) by distance below the ask. The maker strategies post the bid that maximizes fill rate × edge.</div>
+    </section>
+
+    <section class="panel">
+      <h2>Forecast skill <span class="sub">(all stations, °C)</span></h2>
+      <div class="scroll"><table id="skill"></table></div>
+      <div class="note" id="mixer"></div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Live markets</h2>
+      <div class="toolbar">
+        <select id="fBin"><option value="">All leads</option><option value="d0">Today / settling</option><option value="d1">Tomorrow</option><option value="d2">+2 days</option></select>
+        <select id="fKind"><option value="">High &amp; low</option><option value="high">High</option><option value="low">Low</option></select>
+        <select id="fTrade"><option value="">All</option><option value="1">Tradeable</option><option value="edge">Edge ≥ 3¢</option></select>
+        <span class="sub" id="boardCount"></span>
+      </div>
+      <div class="scroll"><table id="board"></table></div>
+      <div class="legend"><span><i class="b-wx"></i>weather model</span><span><i class="b-mkt"></i>market</span><span><i class="b-fin"></i>learned blend (used to trade)</span></div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Open positions &amp; resting bids</h2>
+      <div class="scroll"><table id="positions"></table></div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Recent fills</h2>
+      <div class="scroll"><table id="fillsLog"></table></div>
+    </section>
+
+    <section class="panel wide">
+      <h2>Recent settlements</h2>
+      <div class="scroll"><table id="settlements"></table></div>
+    </section>
+  </div>
+</main>
+
+<script>
+const COLORS = ["#8a93a1", "#0f8a5f", "#2f5bd3", "#b7791f", "#7c3aed", "#c2413b", "#db2777"];
+const BIN_LABEL = { d3: "D-3", d2: "D-2", d1: "D-1", d0a: "today (>12h)", d0b: "today (6–12h)", d0c: "today (2–6h)", d0d: "today (<2h)", post: "day over" };
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ok = (x) => x !== null && x !== undefined && isFinite(x);
+const money = (x) => (!ok(x) ? "—" : `${x < 0 ? "-" : ""}$${Math.abs(x).toFixed(2)}`);
+const pct = (x, d = 1) => (!ok(x) ? "—" : `${(x * 100).toFixed(d)}%`);
+const num = (x, d = 2) => (!ok(x) ? "—" : Number(x).toFixed(d));
+const signed = (text, x) => `<span class="${x > 0 ? "pos" : x < 0 ? "neg" : ""}">${text}</span>`;
+const ago = (iso) => { if (!iso) return "never"; const s = (Date.now() - new Date(iso).getTime()) / 1000; return s < 90 ? `${Math.round(s)}s ago` : s < 5400 ? `${Math.round(s / 60)}m ago` : `${(s / 3600).toFixed(1)}h ago`; };
+let state = null;
+const open = new Set();
+
+function renderStatus(st) {
+  const s = st.status, L = st.sim.learning;
+  $("mode").innerHTML = st.mode.learning ? '<span class="pill ok">learning mode</span>' : '<span class="pill wait">learning frozen</span>';
+  $("settled").textContent = L.settledEvents;
+  $("proven").textContent = `${L.variantsProven}/${L.variantsTested || 0}`;
+  const oc = s.outcomeCheck || { n: 0, match: 0 };
+  $("datacheck").textContent = oc.n ? pct(oc.match / oc.n, 0) : "—";
+  const bf = s.backfill;
+  const reasons = (s.notTradeable || []).map(([k, v]) => `${esc(k)} ${v}`).join(", ") || "—";
+  $("statusKv").innerHTML = [
+    ["Events", `${s.events} tracked · ${s.tradeable} tradeable`],
+    ["Not tradeable", reasons],
+    ["Awaiting resolution", s.trackedAwaitingResolution],
+    ["Forecasts", `${s.forecastStations} stations fresh · ensembles ${s.ensembleStations}`],
+    ["Observations", `METAR ${s.metarOkAt ? ago(new Date(s.metarOkAt).toISOString()) : "—"}${s.hkoOkAt ? ` · HKO ${ago(new Date(s.hkoOkAt).toISOString())}` : ""}`],
+    ["History backfill", bf ? (bf.running ? `running ${bf.done}/${bf.total}${bf.current ? ` (${esc(bf.current)})` : ""}` : `${bf.done}/${bf.total} stations · ${bf.stationDays ?? 0} station-days${bf.failed ? ` · ${bf.failed} failed` : ""}`) : "not needed"],
+    ["Proven when", `≥ ${L.minEvents} events and lower bound > 0`]
+  ].map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("") +
+  (oc.mismatches?.length ? `<span>Mismatches</span><span class="sub">${oc.mismatches.slice(-3).map(esc).join("<br>")}</span>` : "");
+}
+
+function renderScorecard(st) {
+  const c = st.model.calibrator, sc = c.scorecard;
+  const row = (label, s) => {
+    if (!s?.n) return `<tr><td>${label}</td><td colspan="5" class="sub">no settled events yet</td></tr>`;
+    const edge = s.logLoss.mkt - s.logLoss.final;
+    return `<tr><td>${label}</td><td>${s.n}</td><td>${num(s.logLoss.wx, 3)}</td><td>${num(s.logLoss.mkt, 3)}</td><td>${num(s.logLoss.final, 3)}</td><td>${signed((edge >= 0 ? "+" : "") + num(edge, 3), edge)}</td></tr>`;
+  };
+  const bins = Object.entries(sc.byBin || {}).sort((a, b) => Object.keys(BIN_LABEL).indexOf(a[0]) - Object.keys(BIN_LABEL).indexOf(b[0]));
+  $("scorecard").innerHTML = `<tr><th>Slice</th><th>n</th><th>Weather</th><th>Market</th><th>Blend</th><th>Edge</th></tr>` +
+    row("All events", sc.all) + bins.map(([b, s]) => row(BIN_LABEL[b] || b, s)).join("");
+  const w = c.weights;
+  const day = (a, b) => { const t = a + b; return t > 0 ? `${Math.round((100 * a) / t)}% forecast / ${Math.round((100 * b) / t)}% market` : "—"; };
+  $("weights").innerHTML = `Learned trust (${c.updates} events): day-ahead ${day(w.wx, w.market)} · same-day ${day(w.wx + w.wx_x_d0, w.market + w.market_x_d0)} · ` +
+    `market momentum ${w.market_move >= 0 ? "continues" : "reverts"} (${num(w.market_move, 2)}). Edge = market − blend log loss: positive means the blend predicts outcomes better than the price.`;
+}
+
+function renderWindows(st) {
+  const ws = st.sim.learning.windows;
+  const label = { early: "D-2 or earlier", d1: "Day before", "d0-early": "Today, >6h left", "d0-late": "Today, <6h / settling" };
+  $("windows").innerHTML = `<tr><th>Window</th><th>Events</th><th>Ret/$</th><th>Lower bd</th><th>P(edge)</th></tr>` + ws.map((w) =>
+    `<tr><td>${label[w.window] || w.window}</td><td>${w.n}</td><td>${signed(pct(w.mean, 1), w.mean)}</td><td>${signed(pct(w.lcb, 1), w.lcb)}</td><td>${w.n ? pct(w.pPositive, 0) : "—"}</td></tr>`).join("");
+}
+
+function renderLeaderboard(st) {
+  const rows = st.sim.strategies.map((s, i) => `
+    <tr title="${esc(s.description)}">
+      <td><i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${COLORS[i % COLORS.length]};margin-right:6px"></i>${esc(s.label)}</td>
+      <td>${money(s.equity)}</td><td>${signed(pct(s.roi), s.roi)}</td><td>${s.bets}</td><td>${s.events}</td><td>${pct(s.winRate)}</td>
+      <td>${signed(money(s.pnl), s.pnl)}</td><td>${money(s.expectedPnl)}</td><td>${money(s.fees)}</td>
+      <td>${signed(pct(s.returnOnStaked), s.returnOnStaked)}</td><td>${pct(s.maxDrawdown)}</td>
+      <td>${s.openPositions}${s.restingOrders ? ` + ${s.restingOrders} bids` : ""}</td><td>${money(s.openExposure)}</td>
+      <td class="reason">${esc(s.lastReason || "")}</td>
+    </tr>`).join("");
+  $("leaderboard").innerHTML = `<tr><th>Strategy</th><th>Equity</th><th>ROI</th><th>Bets</th><th>Events</th><th>Win%</th><th>P&amp;L</th><th>Expected</th><th>Fees</th><th>Ret/$</th><th>Max DD</th><th>Open</th><th>At risk</th><th class="l">Last decision</th></tr>${rows}`;
+}
+
+function renderEquity(st) {
+  const series = st.sim.strategies.map((s, i) => ({ label: s.label, color: COLORS[i % COLORS.length], pts: [[null, s.start], ...(s.equityCurve || [])] }));
+  if (Math.max(...series.map((s) => s.pts.length)) < 3) {
+    $("equity").innerHTML = '<div class="empty">Equity curves appear once events settle (most cities resolve a few hours after local midnight).</div>';
+    return;
+  }
+  const W = 1000, H = 220, P = 40;
+  const all = series.flatMap((s) => s.pts.map((p) => p[1]));
+  const lo = Math.min(...all), hi = Math.max(...all), span = hi - lo || 1;
+  const x = (i, len) => P + (i / Math.max(1, len - 1)) * (W - P - 8);
+  const y = (v) => 8 + (1 - (v - lo) / span) * (H - 30);
+  const lines = series.map((s) => `<polyline fill="none" stroke="${s.color}" stroke-width="1.8" points="${s.pts.map((p, i) => `${x(i, s.pts.length).toFixed(1)},${y(p[1]).toFixed(1)}`).join(" ")}"/>`).join("");
+  $("equity").innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="none" style="height:220px">
+      <text x="2" y="14">${money(hi)}</text><text x="2" y="${H - 20}">${money(lo)}</text><text x="${P}" y="${H - 4}">settled events →</text>${lines}</svg>
+    <div class="legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.label)}</span>`).join("")}</div>`;
+}
+
+function renderCities(st) {
+  const byCity = st.model.calibrator.scorecard.byCity || {};
+  const rank = { favour: 0, neutral: 1, learning: 2, reduce: 3, avoid: 4 };
+  const rows = st.sim.learning.cities.map((c) => ({ ...c, cal: byCity[c.key] })).sort((a, b) => (rank[a.status] - rank[b.status]) || (b.n - a.n) || a.key.localeCompare(b.key));
+  const pill = (s) => `<span class="pill ${s === "favour" ? "ok" : s === "avoid" ? "bad" : s === "reduce" ? "wait" : "neutral"}">${s}</span>`;
+  $("cities").innerHTML = `<tr><th>City</th><th>Kind</th><th>Events</th><th>Shadow ret/$</th><th>± se</th><th>P(edge)</th><th>Blend vs market</th><th>Multiplier</th><th class="l">Status</th></tr>` +
+    rows.map((c) => {
+      const [city, kind] = c.key.split("|");
+      const adv = c.cal?.n ? c.cal.logLoss.mkt - c.cal.logLoss.final : null;
+      return `<tr><td>${esc(city)}</td><td>${esc(kind)}</td><td>${c.n}</td><td>${signed(pct(c.mean, 1), c.mean)}</td><td>${pct(c.se, 1)}</td><td>${c.n ? pct(c.pPositive, 0) : "—"}</td>
+        <td>${adv === null ? "—" : signed((adv >= 0 ? "+" : "") + num(adv, 3), adv)}</td><td>${num(c.mult, 2)}×</td><td class="l">${pill(c.status)}</td></tr>`;
+    }).join("");
+}
+
+function renderVariants(st) {
+  const v = st.sim.learning.variants;
+  $("variants").innerHTML = v.length
+    ? `<tr><th>Variant</th><th>Events</th><th>Ret/$</th><th>Lower bd</th></tr>` + v.map((r) => `<tr><td>${esc(r.label)}</td><td>${r.n}</td><td>${signed(pct(r.mean, 1), r.mean)}</td><td>${signed(pct(r.lcb, 1), r.lcb)}</td></tr>`).join("")
+    : '<tr><td class="empty">No shadow bets settled yet.</td></tr>';
+}
+
+function renderFills(st) {
+  const rows = st.sim.learning.fills;
+  const phases = ["early", "d0", "post"];
+  const dists = ["1c", "3c", "6c", "10c+"];
+  const cell = (ph, d) => { const r = rows.find((x) => x.phase === ph && x.dist === d); return r ? `${pct(r.p, 0)} <span class="sub">${r.fills}/${r.fills + r.misses}</span>` : "—"; };
+  $("fills").innerHTML = `<tr><th>Below ask</th>${phases.map((p) => `<th>${p === "early" ? "D-1+" : p === "d0" ? "Today" : "Settling"}</th>`).join("")}</tr>` +
+    dists.map((d) => `<tr><td>≤ ${d.replace("+", "")}</td>${phases.map((p) => `<td>${cell(p, d)}</td>`).join("")}</tr>`).join("");
+}
+
+function renderSkill(st) {
+  const rows = st.model.skill.filter((r) => r.bin === "d1" && r.kind === "high").sort((a, b) => (a.sd ?? 9) - (b.sd ?? 9));
+  $("skill").innerHTML = rows.length
+    ? `<tr><th>Source (highs, day before)</th><th>n</th><th>Bias</th><th>Error sd</th></tr>` +
+      rows.map((r) => `<tr><td>${esc(r.source.replace("model:", ""))}</td><td>${r.n}</td><td>${signed(num(r.bias, 2), -Math.abs(r.bias))}</td><td>${num(r.sd, 2)}</td></tr>`).join("")
+    : '<tr><td class="empty">Waiting for the history backfill.</td></tr>';
+  const mix = st.model.mixer;
+  $("mixer").innerHTML = `Bias = forecast − observed. Blend = skill-weighted, debiased mean of the models. ` +
+    (mix.length ? `Ensemble vs Gaussian weights: ${mix.map((m) => `${esc(BIN_LABEL[m.bin] || m.bin)} ${pct(m.ens, 0)} ens`).join(" · ")}` : "Ensemble/Gaussian mix starts 50/50 and adapts per lead.");
+}
+
+function boardRows(st) {
+  const fBin = $("fBin").value, fKind = $("fKind").value, fTrade = $("fTrade").value;
+  return st.board.filter((e) => (!fBin || (fBin === "d0" ? e.bin.startsWith("d0") || e.bin === "post" : e.bin === fBin))
+    && (!fKind || e.kind === fKind) && (!fTrade || (fTrade === "1" ? e.tradeable : (e.best?.edge ?? -1) >= 0.03)));
+}
+
+function renderBoard(st) {
+  const rows = boardRows(st);
+  $("boardCount").textContent = `${rows.length} of ${st.board.length} events · click a row for the distribution`;
+  const u = (e) => `°${e.unit}`;
+  const top = (e, key) => { let bi = -1, bp = -1; e.buckets.forEach((b, i) => { if (ok(b[key]) && b[key] > bp) { bp = b[key]; bi = i; } }); return bi < 0 ? "—" : `${esc(e.buckets[bi].label)} ${pct(bp, 0)}`; };
+  $("board").innerHTML = `<tr><th>City</th><th>Kind</th><th>Date</th><th>Lead</th><th>Observed</th><th>Model</th><th>Market</th><th>Model top</th><th>Market top</th><th>Best edge</th><th class="l">Status</th></tr>` +
+    rows.map((e) => {
+      const b = e.best;
+      const main = `<tr class="ev" data-id="${esc(e.id)}"><td>${esc(e.city)}</td><td>${e.kind}</td><td>${esc(e.date.slice(5))}</td><td>${esc(BIN_LABEL[e.bin] || e.bin)}</td>
+        <td>${ok(e.obsExt) ? `${num(e.obsExt, 1)}${u(e)}` : "—"}</td><td>${ok(e.fcMean) ? `${num(e.fcMean, 1)} ± ${num(e.fcSd, 1)}` : "—"}</td><td>${ok(e.mktMean) ? num(e.mktMean, 1) : "—"}</td>
+        <td>${top(e, "wx")}</td><td>${top(e, "mkt")}</td>
+        <td>${b ? signed(`${esc(b.side)} ${esc(b.label)} ${(b.edge * 100).toFixed(1)}¢`, b.edge) : "—"}</td>
+        <td class="l">${e.tradeable ? '<span class="pill ok">tradeable</span>' : `<span class="pill wait">${esc(e.reason || "—")}</span>`}${e.nowcast ? ` <span class="sub">obs ${e.nowcast.err >= 0 ? "+" : ""}${num(e.nowcast.err, 1)}° vs models</span>` : ""}</td></tr>`;
+      if (!open.has(e.id)) return main;
+      const dist = e.buckets.map((bk) => `<span>${esc(bk.label)}</span><div class="bars">
+          <div class="b-wx" style="width:${(bk.wx ?? 0) * 100}%" title="model ${pct(bk.wx)}"></div>
+          <div class="b-mkt" style="width:${(bk.mkt ?? 0) * 100}%" title="market ${pct(bk.mkt)} (bid ${bk.bid ?? "—"} / ask ${bk.ask ?? "—"})"></div>
+          <div class="b-fin" style="width:${(bk.fin ?? 0) * 100}%" title="blend ${pct(bk.fin)}"></div></div>`).join("");
+      return `${main}<tr class="detail"><td colspan="11"><div class="sub" style="margin-bottom:6px">${esc(e.station)} · ${esc(e.slug)} · forecast from ${esc(e.gauss || "—")} · market quality ${esc(e.quality)} · volume $${e.volume}</div><div class="dist">${dist}</div></td></tr>`;
+    }).join("");
+}
+
+function renderPositions(st) {
+  const pos = st.sim.positions.map((p) => `<tr><td>${esc(p.strategyId)}</td><td>${esc(`${p.city} ${p.kind} ${p.date?.slice(5)}`)}</td><td>${esc(p.label || "")}</td><td>${p.side}</td><td>${esc(p.execution || "")}</td><td>${num(p.avgPrice, 3)}</td><td>${money(p.cost)}</td><td>${pct(p.pSide, 0)}</td><td>${num((p.edge ?? 0) * 100, 1)}¢</td><td>${esc(BIN_LABEL[p.leadBin] || p.leadBin)}</td></tr>`);
+  const ord = st.sim.orders.map((o) => `<tr><td>${esc(o.strategyId)}</td><td>${esc(o.event)}</td><td>${esc(o.bucket)}</td><td>${o.side}</td><td>bid</td><td>${num(o.price, 3)}</td><td>${money(o.reservedUsd)}</td><td>${pct(o.pSide, 0)}</td><td>${num((o.edge ?? 0) * 100, 1)}¢</td><td>expires ${new Date(o.expiresAt).toLocaleTimeString()}</td></tr>`);
+  $("positions").innerHTML = pos.length + ord.length
+    ? `<tr><th>Strategy</th><th>Event</th><th>Bucket</th><th>Side</th><th>Type</th><th>Price</th><th>Cost</th><th>P(side)</th><th>Edge</th><th>Lead / expiry</th></tr>${[...pos, ...ord].slice(0, 150).join("")}`
+    : '<tr><td class="empty">No open positions.</td></tr>';
+}
+
+async function refreshTrades() {
+  try {
+    const t = await (await fetch("/api/weather/trades?limit=60")).json();
+    $("fillsLog").innerHTML = t.fills.length
+      ? `<tr><th>Time</th><th>Strategy</th><th>Event</th><th>Bucket</th><th>Side</th><th>Type</th><th>Lead</th><th>Price</th><th>Cost</th><th>P(side)</th><th>Market</th><th>Edge</th></tr>` +
+        t.fills.map((r) => `<tr><td>${new Date(r.timestamp).toLocaleString()}</td><td>${esc(r.strategy)}</td><td>${esc(`${r.city} ${r.kind} ${r.date.slice(5)}`)}</td><td>${esc(r.bucket)}</td><td>${esc(r.side)}</td><td>${esc(r.execution)}</td><td>${esc(BIN_LABEL[r.lead_bin] || r.lead_bin)}</td><td>${num(+r.avg_price, 3)}</td><td>${money(+r.cost_usd)}</td><td>${pct(+r.p_side, 0)}</td><td>${r.p_market_side ? pct(+r.p_market_side, 0) : "—"}</td><td>${num(+r.edge * 100, 1)}¢</td></tr>`).join("")
+      : '<tr><td class="empty">No fills yet.</td></tr>';
+    $("settlements").innerHTML = t.settlements.length
+      ? `<tr><th>Settled</th><th>Strategy</th><th>Event</th><th>Bucket</th><th>Side</th><th>Price</th><th>Cost</th><th>Result</th><th>P&amp;L</th></tr>` +
+        t.settlements.map((r) => `<tr><td>${new Date(r.settled_at).toLocaleString()}</td><td>${esc(r.strategy)}</td><td>${esc(`${r.city} ${r.kind} ${r.date.slice(5)}`)}</td><td>${esc(r.bucket)}</td><td>${esc(r.side)}</td><td>${num(+r.avg_price, 3)}</td><td>${money(+r.cost_usd)}</td><td>${r.won === "true" ? '<span class="pill ok">won</span>' : '<span class="pill bad">lost</span>'}</td><td>${signed(money(+r.pnl_usd), +r.pnl_usd)}</td></tr>`).join("")
+      : '<tr><td class="empty">Nothing settled yet — events resolve a few hours after each city\'s local midnight.</td></tr>';
+  } catch {
+    // keep last
+  }
+}
+
+function render() {
+  if (!state) return;
+  for (const fn of [renderStatus, renderScorecard, renderWindows, renderLeaderboard, renderEquity, renderCities, renderVariants, renderFills, renderSkill, renderBoard, renderPositions]) {
+    try { fn(state); } catch (e) { console.error(fn.name, e); }
+  }
+}
+
+async function refresh() {
+  try {
+    const j = await (await fetch("/api/weather")).json();
+    if (!j.state) {
+      $("updated").textContent = "no data yet — start it with npm run sim:weather";
+      return;
+    }
+    state = j.state;
+    $("updated").innerHTML = `${j.running ? "" : '<span class="pill bad">stalled</span> '}updated ${ago(state.updatedAt)}`;
+    render();
+  } catch {
+    $("updated").textContent = "dashboard server unreachable";
+  }
+}
+
+$("board").addEventListener("click", (ev) => {
+  const tr = ev.target.closest("tr.ev");
+  if (!tr) return;
+  const id = tr.dataset.id;
+  open.has(id) ? open.delete(id) : open.add(id);
+  renderBoard(state);
+});
+for (const id of ["fBin", "fKind", "fTrade"]) $(id).addEventListener("change", () => renderBoard(state));
+$("reset").addEventListener("click", async () => {
+  if (!confirm("Reset every weather strategy's paper bankroll? What the engine has learned is kept.")) return;
+  const r = await fetch("/api/weather/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  alert(r.ok ? "Reset requested — applied on the next tick." : `Reset failed (${r.status})`);
+});
+
+refresh();
+refreshTrades();
+setInterval(refresh, 10_000);
+setInterval(refreshTrades, 30_000);
+</script>
+</body>
+</html>

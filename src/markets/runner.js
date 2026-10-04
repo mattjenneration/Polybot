@@ -1,5 +1,6 @@
 /**
- * Multi-market paper-trading simulator (crypto price ladders + weather), run alongside the BTC 5m bot.
+ * Multi-market paper-trading simulator (crypto price ladders), run alongside the BTC 5m bot.
+ * Temperature markets have their own trader: src/weather/runner.js (npm run sim:weather).
  *   npm run sim:markets
  * Every loop: discover markets → model probability → log calibration snapshot → paper-take mispriced
  * outcomes from the real order book (with taker fees) → settle resolved markets from Gamma.
@@ -13,7 +14,6 @@ import { appendCsvRow, sleep } from "../utils.js";
 import { errorToRedactedLogString } from "../logRedact.js";
 import { fetchMarketsByTag, fetchBooks, fetchResolution } from "./gamma.js";
 import { createCryptoLadderModule } from "./cryptoLadder.js";
-import { createWeatherModule } from "./weather.js";
 import { createLedger, decideEntry, metaString, LOG_DIR } from "./paperLedger.js";
 
 const num = (name, def) => {
@@ -29,19 +29,13 @@ const CFG = {
   betUsd: num("MARKETS_BET_USD", 10),
   maxOpenPerModule: num("MARKETS_MAX_OPEN_POSITIONS", 60),
   maxOpenPerEvent: num("MARKETS_MAX_POSITIONS_PER_EVENT", 3),
-  modules: list("MARKETS_MODULES", ["crypto_ladder", "weather"]),
+  modules: list("MARKETS_MODULES", ["crypto_ladder"]),
   crypto: {
     minEdge: num("CRYPTO_LADDER_MIN_EDGE", 0.06),
     minMinutesToExpiry: num("CRYPTO_LADDER_MIN_MINUTES_TO_EXPIRY", 15),
     assets: list("CRYPTO_LADDER_ASSETS", ["BTC", "ETH", "SOL", "XRP"]),
     tags: list("CRYPTO_LADDER_TAGS", ["crypto"]),
     maxDays: num("CRYPTO_LADDER_MAX_DAYS", 35)
-  },
-  weather: {
-    minEdge: num("WEATHER_MIN_EDGE", 0.08),
-    minMinutesToExpiry: num("WEATHER_MIN_MINUTES_TO_EXPIRY", 0),
-    tags: list("WEATHER_TAGS", ["weather"]),
-    maxDays: num("WEATHER_MAX_DAYS", 4)
   }
 };
 
@@ -51,9 +45,6 @@ export function buildModules() {
   const mods = [];
   if (CFG.modules.includes("crypto_ladder")) {
     mods.push({ ...createCryptoLadderModule(CFG.crypto), cfg: CFG.crypto });
-  }
-  if (CFG.modules.includes("weather")) {
-    mods.push({ ...createWeatherModule(CFG.weather), cfg: CFG.weather });
   }
   return mods;
 }

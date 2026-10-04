@@ -14,8 +14,11 @@
     "pm2:delete": "pm2 delete ecosystem.config.cjs",
     "test:trading": "ENABLE_LIVE_TRADING=true POLYMARKET_FUNDER_ADDRESS= POLY_FUNDER_ADDRESS= PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000001 node --test src/trading/polymarketTrade.test.js",
     "sim:markets": "node src/markets/runner.js",
+    "sim:weather": "node src/weather/runner.js",
+    "weather:backfill": "node src/weather/backfill.js",
+    "report:weather": "node src/weather/report.js",
     "report:markets": "node src/scripts/marketsReport.js",
-    "test": "node --test test/*.test.js src/markets/markets.test.js"
+    "test": "node --test test/*.test.js src/markets/markets.test.js src/weather/weather.test.js"
   },
   "dependencies": {
     "@polymarket/clob-client": "^5.8.0",

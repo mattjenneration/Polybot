@@ -134,6 +134,47 @@ app.get("/api/markets-sim", (req, res) => {
   }
 });
 
+// Weather trader (src/weather/runner.js) — its dashboard.json, trade logs and the bankroll-reset control.
+const WEATHER_DIR = path.resolve(process.cwd(), process.env.WEATHER_LOG_DIR || "logs/weather");
+
+app.get("/api/weather", (req, res) => {
+  const file = path.join(WEATHER_DIR, "dashboard.json");
+  if (!fs.existsSync(file)) return res.json({ ok: true, running: false, state: null });
+  try {
+    const mtimeMs = fs.statSync(file).mtimeMs;
+    res.json({ ok: true, running: Date.now() - mtimeMs < 3 * 60_000, state: JSON.parse(fs.readFileSync(file, "utf8")), resetProtected: Boolean(DASHBOARD_SECRET) });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
+app.get("/api/weather/trades", (req, res) => {
+  const limit = Math.max(1, Math.min(1000, Number(req.query.limit) || 100));
+  res.json({
+    fills: tailCsv(path.join(WEATHER_DIR, "trades.csv"), limit),
+    settlements: tailCsv(path.join(WEATHER_DIR, "settlements.csv"), limit),
+    outcomes: tailCsv(path.join(WEATHER_DIR, "outcomes.csv"), limit)
+  });
+});
+
+app.post("/api/weather/reset", (req, res) => {
+  if (DASHBOARD_SECRET) {
+    const bearer = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+    if (bearer !== DASHBOARD_SECRET && req.body?.secret !== DASHBOARD_SECRET) {
+      res.status(401).json({ ok: false, error: "unauthorized" });
+      return;
+    }
+  }
+  try {
+    fs.mkdirSync(WEATHER_DIR, { recursive: true });
+    const payload = { resetRequestedAt: new Date().toISOString() };
+    fs.writeFileSync(path.join(WEATHER_DIR, "controls.json"), JSON.stringify(payload), "utf8");
+    res.json({ ok: true, ...payload });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err?.message || err) });
+  }
+});
+
 const HOST = process.env.DASHBOARD_HOST || "127.0.0.1";
 app.listen(PORT, HOST, () => {
   console.log(`Dashboard: http://${HOST}:${PORT}/  (logs: ${LOG_DIR})`);

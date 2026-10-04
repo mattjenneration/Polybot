@@ -34,6 +34,23 @@ const apps = [
     }
   },
   {
+    name: "weather-sim",
+    script: path.join(__dirname, "src/weather/runner.js"),
+    cwd: __dirname,
+    instances: 1,
+    autorestart: true,
+    watch: false,
+    max_memory_restart: "500M",
+    kill_timeout: 10000,
+    error_file: path.join(__dirname, "logs/pm2-weather-sim-error.log"),
+    out_file: path.join(__dirname, "logs/pm2-weather-sim-out.log"),
+    merge_logs: true,
+    time: true,
+    env: {
+      NODE_ENV: "production"
+    }
+  },
+  {
     name: "btc-dashboard",
     script: path.join(__dirname, "src/server.js"),
     cwd: __dirname,

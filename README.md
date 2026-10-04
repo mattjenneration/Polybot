@@ -131,24 +131,136 @@ Things the simulation cannot capture:
 - **The minimum order size.** Polymarket's minimum is 5 shares, so the smallest bet is about
   5 × price.
 
-## Other-markets simulator (crypto ladders + weather)
+## Weather trader (daily high/low temperature markets)
 
-A second paper-trading process runs next to the BTC 5m bot to find out which market we can actually beat:
+A separate paper trader for Polymarket's "Highest/Lowest temperature in <city> on <date>" markets
+(about 49 cities, high and low, two to three days listed at once). It runs in **learning mode**: it
+trades on paper for days or weeks, and what it learns decides how much to bid, on which cities, and
+when.
 
-- **Crypto price ladders.** These are "Bitcoin above $X on <date>", "between $X and $Y", "reach $X in October" and hourly/daily Up or Down markets for BTC/ETH/SOL/XRP. They're priced off the Deribit options implied-vol surface (falling back to Binance realized vol) and Binance spot.
-- **Weather.** These are "Highest temperature in <city> on <date>" buckets. They're priced from Open-Meteo ensemble members (ECMWF + GFS + ICON) for the hours still to come. That forecast is floored by and bias-corrected against live METAR observations at the resolution airport station.
+```bash
+npm run sim:weather                  # foreground; or npm run pm2:start (pm2 app "weather-sim")
+npm run dashboard                    # http://127.0.0.1:3000/weather.html
+npm run report:weather               # leaderboard, what's been learned, go-live checklist
+npm run weather:backfill -- --days 60 --stations KLGA,EGLC   # optional; runs automatically per new station
+```
 
-Each loop discovers markets on Gamma and computes a model probability. It logs a calibration snapshot, then paper-buys the YES/NO side whose ask plus taker fee sits at least `*_MIN_EDGE` below the model. Fills walk the real CLOB book. Positions settle from Gamma resolutions.
+**How these markets resolve.** This was checked against 574 resolved markets, and the rule below
+picked the winning bucket for 573 of them:
+
+- Most cities: the max (or min) of the METAR reports, routine plus specials, at the named airport
+  over the station's local calendar day, rounded to a whole degree. The source is NOAA's
+  `weather.gov/wrh/timeseries`. Taipei is the same station data via Wunderground.
+- Hong Kong: the Observatory's 0.1 °C daily extreme, **truncated** (33.6 → "33°C").
+- Markets keep trading through the target day, well past Gamma's `endDate` (12:00 UTC on the day).
+  They resolve a few hours after local midnight, and Hong Kong takes several days.
+
+**Prediction engine** (`src/weather/model/`). It has several approaches, each scored per station
+and lead time:
+
+| Approach | What it is |
+|---|---|
+| Multi-model NWP | ECMWF IFS + AIFS, GFS/HRRR, ICON, GEM, JMA, Météo-France, UKMO, CMA, NBM (US), KNMI/MET Norway (Europe), via Open-Meteo. Each model is debiased per station, high/low and lead. Raw models run 1–2 °C cold on highs. |
+| Blend | Skill-weighted mean of the debiased models, with its own learned error (≈1.0 °C the day before, which beats any single model). |
+| Nowcast | On the day itself, the blend is pulled toward today's observed model error, more strongly close to the hour of the extreme. |
+| Ensemble | ECMWF/GEFS/ICON-EPS members, debiased by their parent model, then dressed to the ensemble's learned error. |
+| Observations | The running METAR or HKO extreme is a hard floor (highs) or ceiling (lows). Buckets it rules out are capped at 0.2%. |
+| Market | The implied distribution from the order books, plus its 1–3 hour momentum. |
+
+The Gaussian (blend or nowcast) and the ensemble are mixed with weights learned per lead time.
+A calibrator, which is a learned logarithmic opinion pool, then blends the weather probability with
+the market's, separately for the day itself and days before. Its weights show how much the
+forecast deserves to be trusted over the crowd.
+
+**Strategies.** Each gets a $1000 paper bankroll by default:
+
+| id | Idea |
+|---|---|
+| `market-favorite` | Control. Buys the market's favourite the day before, with no model. |
+| `nowcast-sniper` | Same day only. Buys near-certain sides once observations pin the outcome. |
+| `forecast-taker` | Takes the blended probability when the edge after fees is at least 6¢. |
+| `maker-bidder` | Rests the bid with the best fill-rate × edge instead of paying the spread and fee. |
+| `tail-fader` | Buys NO on long-shot buckets the market overprices. |
+| `model-only` | Uses the pure forecast and ignores the market price. Tests whether the weather model alone beats the crowd. |
+| `learning` | Follows whichever proven shadow variant fits the current timing window. It's sized by Kelly × confidence × the city's learned multiplier, and sits out until a variant is proven. |
+
+**Learning mode** (`WEATHER_LEARNING_MODE=true`, the default) has five parts:
+
+- **Shadow variants.** 96 of them, covering probability source × edge threshold × timing window
+  × side × taker/maker. Each paper-trades $1 bets, and each settled event is one sample.
+- **Timing.** Returns are pooled by window (D-2, D-1, today with more than 6h left, today with
+  less than 6h left).
+- **Cities.** Pooled returns give each city a stake multiplier from 0 (avoid) to 2 (favour).
+- **Best bid.** The maker fill rate is learned by distance below the ask.
+- **Forecast skill.** It's seeded from 45 days of history: Open-Meteo previous runs against the
+  IEM METAR archive, walk-forward. After that it's updated from every observed day.
+
+Each lead bin's mixer and calibrator also update on every resolved event. Scoring is
+prequential, meaning each prediction is scored before the system learns from it.
+
+**Data safety.** An event is not tradeable when:
+
+- forecasts are more than 3h old,
+- same-day observations are more than 2h old,
+- a finished day's observations have gaps,
+- the station's history backfill hasn't finished, or
+- the market has no usable quotes.
+
+Fills walk real CLOB books with each market's fee schedule. NO books are mirrored from YES books;
+on Polymarket they're the same book. Resting bids fill only when the ask trades through them.
+
+Logs go to `logs/weather/`:
+
+- `state.json`, `samples.json`: learning state; these survive restarts.
+- `trades.csv`, `settlements.csv`: paper fills and settlements.
+- `outcomes.csv`: observed extreme vs the official result.
+- `snapshots/*.jsonl`: an hourly per-event model vs market record, about 9 MB/day.
+  Turn it off with `WEATHER_RECORD_SNAPSHOTS=false`.
+
+Settings are in `.env.example` under "Weather trader". Live trading is **not** wired for weather
+yet. The report's go-live checklist is the bar to clear first.
+
+Data sources are all free, with no keys. Open-Meteo's free tier is for non-commercial use, so set
+`OPEN_METEO_API_KEY` for commercial use. The required outbound hosts are:
+
+- `gamma-api.polymarket.com`, `clob.polymarket.com`
+- `api.open-meteo.com`, `ensemble-api.open-meteo.com`, `previous-runs-api.open-meteo.com`
+- `aviationweather.gov`, `mesonet.agron.iastate.edu`
+- `data.weather.gov.hk`, `www.hko.gov.hk`
+
+## Other-markets simulator (crypto ladders)
+
+A second paper-trading process runs next to the BTC 5m bot for **crypto price ladders**:
+
+- "Bitcoin above $X on <date>"
+- "between $X and $Y"
+- "reach $X in October"
+- hourly and daily Up or Down markets
+
+These cover BTC, ETH, SOL and XRP. They're priced off the Deribit options implied-vol surface,
+falling back to Binance realized vol, and Binance spot.
+
+Each loop discovers markets on Gamma and computes a model probability. It logs a calibration
+snapshot, then paper-buys the YES/NO side whose ask plus taker fee sits at least `*_MIN_EDGE` below
+the model. Fills walk the real CLOB book, and positions settle from Gamma resolutions.
 
 ```bash
 npm run sim:markets                 # foreground
-npm run pm2:start                   # runs btc-assistant + markets-sim + dashboard
+npm run pm2:start                   # runs btc-assistant + markets-sim + weather-sim + dashboard
 npm run report:markets -- --hours 24
 ```
 
-The report compares all three markets after fees. It also scores the model against the market's own price (Brier score) on resolved markets. If the model doesn't beat the market's Brier score, any profit is luck. Logs go to `logs/markets_*.csv`, and state goes to `logs/markets_state.json`, which survives restarts. The dashboard shows a "markets sim" panel. Settings are listed in `.env.example`.
+The report compares the markets after fees. It also scores the model against the market's own
+price (Brier score) on resolved markets. If the model doesn't beat the market's Brier score, any
+profit is luck.
 
-Required outbound hosts: `gamma-api.polymarket.com`, `clob.polymarket.com`, `www.deribit.com`, `api.binance.com`, `ensemble-api.open-meteo.com` and `aviationweather.gov`.
+- Logs go to `logs/markets_*.csv`.
+- State goes to `logs/markets_state.json`, which survives restarts.
+- The dashboard shows a "markets sim" panel.
+- Settings are listed in `.env.example`.
+
+Required outbound hosts: `gamma-api.polymarket.com`, `clob.polymarket.com`, `www.deribit.com` and
+`api.binance.com`.
 
 ## Requirements
 

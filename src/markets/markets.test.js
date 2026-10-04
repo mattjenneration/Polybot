@@ -10,7 +10,6 @@ process.env.MARKETS_LOG_DIR = TMP;
 const { normCdf, probAbove, probTouch } = await import("./math.js");
 const { parseInstrumentName, buildSurface, surfaceIv } = await import("./deribit.js");
 const { parseCryptoMarket, priceContract } = await import("./cryptoLadder.js");
-const { parseBucket, parseStation, parseTargetDate, parseWeatherMarket, buildDayDistribution, bucketProbability, metarTempC } = await import("./weather.js");
 const { normalizeGammaMarket, parseResolution } = await import("./gamma.js");
 const { decideEntry, createLedger } = await import("./paperLedger.js");
 const { DEFAULT_FEE_SCHEDULE } = await import("../core/fees.js");
@@ -76,65 +75,6 @@ test("crypto: between buckets of a full ladder sum to 1", () => {
   for (let i = 1; i < edges.length; i += 1) total += priceContract({ kind: "between", lo: edges[i - 1], hi: edges[i], expiryMs }, { spot: 118000, ivAt, nowMs: now });
   total += priceContract({ kind: "above", lo: edges[edges.length - 1], expiryMs }, { spot: 118000, ivAt, nowMs: now });
   assert.ok(Math.abs(total - 1) < 1e-9);
-});
-
-test("weather: bucket / station / date parsing", () => {
-  assert.deepEqual(parseBucket("74-75°F"), { lo: 74, hi: 75, unit: "F" });
-  assert.deepEqual(parseBucket("73°F or below"), { lo: null, hi: 73, unit: "F" });
-  assert.deepEqual(parseBucket("84°F or higher"), { lo: 84, hi: null, unit: "F" });
-  assert.deepEqual(parseBucket("15°C"), { lo: 15, hi: 15, unit: "C" });
-  assert.deepEqual(parseBucket("-2°C or below"), { lo: null, hi: -2, unit: "C" });
-  assert.equal(parseStation("Resolves per https://www.wunderground.com/history/daily/us/ny/new-york-city/KLGA."), "KLGA");
-  assert.equal(parseStation("recorded at the London City Airport Station"), "EGLC");
-  assert.equal(parseTargetDate("Highest temperature in NYC on October 3?", Date.UTC(2026, 9, 4)), "2026-10-03");
-  assert.equal(parseTargetDate("on December 31?", Date.UTC(2027, 0, 1)), "2026-12-31");
-  assert.equal(metarTempC({ rawOb: "KLGA 031651Z 18008KT 10SM FEW250 26/14 A3012 RMK AO2 T02560139", temp: 26 }), 25.6);
-  assert.equal(metarTempC({ rawOb: "X T10120020", temp: -1 }), -1.2);
-});
-
-/** Synthetic Open-Meteo ensemble for NYC (EDT, UTC−4): 3 members peaking at 15:00 local at 72/73/74°F. */
-function nycForecast() {
-  const time = [];
-  const members = [[], [], []];
-  for (let d = 2; d <= 5; d += 1) {
-    for (let h = 0; h < 24; h += 1) {
-      time.push(`2026-10-0${d}T${String(h).padStart(2, "0")}:00`);
-      const shape = Math.max(0, 1 - Math.abs(h - 15) / 9);
-      members.forEach((arr, i) => arr.push(60 + (12 + i) * shape));
-    }
-  }
-  return {
-    utc_offset_seconds: -14400,
-    hourly: {
-      time,
-      temperature_2m_member01_ecmwf_ifs025: members[0],
-      temperature_2m_member02_ecmwf_ifs025: members[1],
-      temperature_2m_gfs025: members[2]
-    }
-  };
-}
-
-test("weather: day distribution with observations floors and bias-corrects", () => {
-  const nowMs = Date.UTC(2026, 9, 3, 16); // 12:00 EDT
-  const metars = [
-    { obsTime: Date.UTC(2026, 9, 3, 14) / 1000, temp: 20, rawOb: "KLGA T02000100" }, // 10:00 local, 68.0F
-    { obsTime: Date.UTC(2026, 9, 3, 15, 51) / 1000, temp: 21, rawOb: "KLGA T02110100" } // 11:51 local, 69.98F
-  ];
-  const dist = buildDayDistribution({ forecast: nycForecast(), metars, date: "2026-10-03", unit: "F", nowMs });
-  assert.equal(dist.members.length, 3);
-  assert.ok(Math.abs(dist.obsMax - 69.98) < 1e-6);
-  assert.ok(dist.bias > 0 && dist.bias < 6); // obs warmer than ensemble mean at noon
-  assert.ok(dist.hoursAhead > 2.5 && dist.hoursAhead < 3.5);
-
-  const buckets = [[null, 69], [70, 71], [72, 73], [74, 75], [76, 77], [78, null]];
-  const ps = buckets.map(([lo, hi]) => bucketProbability({ members: dist.members, obsMax: dist.obsMax, sigma: 1.2, lo, hi }));
-  assert.ok(Math.abs(ps.reduce((a, b) => a + b, 0) - 1) < 1e-9);
-  assert.ok(ps[0] < 1e-9, "max can't finish below an already-observed 70F");
-
-  // Day over: no remaining hours → deterministic around observed max
-  const late = buildDayDistribution({ forecast: nycForecast(), metars, date: "2026-10-03", unit: "F", nowMs: Date.UTC(2026, 9, 4, 5) });
-  assert.equal(late.members.length, 0);
-  assert.ok(bucketProbability({ members: [], obsMax: late.obsMax, sigma: 0.3, lo: 70, hi: 71 }) > 0.9); // 69.98F sits near the 69/70 rounding edge
 });
 
 test("gamma: market normalization and resolution parsing", () => {
@@ -227,15 +167,4 @@ test("end-to-end: discover → price → paper trade → settle on a mocked netw
     assert.ok(fs.existsSync(path.join(TMP, f)), f);
   }
   assert.ok(calls.some((c) => c.includes("deribit")));
-});
-
-test("weather module parses a realistic market", () => {
-  const m = parseWeatherMarket({
-    eventTitle: "Highest temperature in NYC on October 3?",
-    question: "Will the highest temperature in New York City be between 74-75°F on October 3?",
-    groupItemTitle: "74-75°F",
-    description: "This market resolves based on the highest temperature recorded at the LaGuardia Airport Station (https://www.wunderground.com/history/daily/us/ny/new-york-city/KLGA).",
-    endMs: Date.UTC(2026, 9, 4, 12)
-  });
-  assert.deepEqual(m, { lo: 74, hi: 75, unit: "F", station: "KLGA", date: "2026-10-03" });
 });
