@@ -1,5 +1,6 @@
 /** Polymarket Gamma (discovery / resolution) and CLOB (order book) access for the multi-market simulator. */
 import { CONFIG } from "../config.js";
+import { normalizeFeeSchedule } from "../core/fees.js";
 
 function parseJsonArray(x) {
   if (Array.isArray(x)) return x;
@@ -47,6 +48,7 @@ export function normalizeGammaMarket(m, event = null) {
     closed: Boolean(m.closed),
     acceptingOrders: m.acceptingOrders !== false,
     enableOrderBook: m.enableOrderBook !== false,
+    feeSchedule: normalizeFeeSchedule(m.feeSchedule),
     raw: m
   };
 }

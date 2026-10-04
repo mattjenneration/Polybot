@@ -11,7 +11,6 @@ import { pathToFileURL } from "node:url";
 import { applyGlobalProxyFromEnv } from "../net/proxy.js";
 import { appendCsvRow, sleep } from "../utils.js";
 import { errorToRedactedLogString } from "../logRedact.js";
-import { getFeeSchedule } from "../simulation/fills.js";
 import { fetchMarketsByTag, fetchBooks, fetchResolution } from "./gamma.js";
 import { createCryptoLadderModule } from "./cryptoLadder.js";
 import { createWeatherModule } from "./weather.js";
@@ -83,7 +82,6 @@ export async function runModule(mod, ledger, lastSnapshotAt, nowMs) {
     else unparsed += 1;
   }
   const priced = await mod.priceAll(items, nowMs);
-  const feeSchedule = getFeeSchedule(mod.feeCategory);
 
   // Calibration snapshots (independent of trading thresholds) + resolution watch
   for (const { market } of items) {
@@ -129,7 +127,7 @@ export async function runModule(mod, ledger, lastSnapshotAt, nowMs) {
         p: pr.p,
         yesAsks: books.get(market.yesTokenId)?.asks,
         noAsks: books.get(market.noTokenId)?.asks,
-        feeSchedule,
+        feeSchedule: market.feeSchedule,
         minEdge: mod.cfg.minEdge,
         betUsd: CFG.betUsd
       });

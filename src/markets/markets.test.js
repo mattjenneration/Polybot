@@ -13,7 +13,7 @@ const { parseCryptoMarket, priceContract } = await import("./cryptoLadder.js");
 const { parseBucket, parseStation, parseTargetDate, parseWeatherMarket, buildDayDistribution, bucketProbability, metarTempC } = await import("./weather.js");
 const { normalizeGammaMarket, parseResolution } = await import("./gamma.js");
 const { decideEntry, createLedger } = await import("./paperLedger.js");
-const { getFeeSchedule } = await import("../simulation/fills.js");
+const { DEFAULT_FEE_SCHEDULE } = await import("../core/fees.js");
 
 const MON = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
 const deribitName = (ms, k, t) => {
@@ -147,7 +147,7 @@ test("gamma: market normalization and resolution parsing", () => {
 });
 
 test("entry rule: takes the side with fee-adjusted edge, walks only while edge holds", () => {
-  const feeSchedule = getFeeSchedule("crypto");
+  const feeSchedule = DEFAULT_FEE_SCHEDULE;
   const d = decideEntry({
     p: 0.02,
     yesAsks: [{ price: "0.05", size: "1000" }],

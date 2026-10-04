@@ -5,20 +5,43 @@
 import fs from "node:fs";
 import path from "node:path";
 import { appendCsvRow, ensureDir } from "../utils.js";
-import { allInPricePerShare, settleBinaryPosition, simulateTakerBuy } from "../simulation/fills.js";
+import { DEFAULT_FEE_SCHEDULE, takerFeePerShare } from "../core/fees.js";
+import { normalizeBook, simulateTakerBuy } from "../core/orderbook.js";
 import { bestPrice } from "./gamma.js";
 
 export const LOG_DIR = process.env.MARKETS_LOG_DIR || "./logs";
 const STATE_FILE = () => path.join(LOG_DIR, "markets_state.json");
 
 const fmt = (x, d = 4) => (x === null || x === undefined || !Number.isFinite(Number(x)) ? "" : Number(x).toFixed(d));
+/** All-in cost per share (price + taker fee) when taking at `price`. */
+const allInPricePerShare = (price, feeSchedule) => price + takerFeePerShare(price, feeSchedule);
+
+/**
+ * FAK taker buy against raw CLOB asks via the shared order-book walk, in the shape the ledger logs.
+ * costUsd is notional only; totalUsd includes the fee.
+ */
+function takerFill(asks, { budgetUsd, limitPrice, feeSchedule }) {
+  const book = normalizeBook({ asks }, Infinity);
+  const fill = simulateTakerBuy(book, { maxUsd: budgetUsd, limitPrice, feeSchedule });
+  if (!fill) return { status: "no_liquidity" };
+  return {
+    status: fill.costUsd >= budgetUsd - 1e-6 ? "filled" : "partial",
+    shares: fill.shares,
+    costUsd: fill.notionalUsd,
+    feeUsd: fill.feeUsd,
+    totalUsd: fill.costUsd,
+    avgPrice: fill.avgPrice,
+    bestAsk: book.asks[0][0]
+  };
+}
+
 export const metaString = (meta) => Object.entries(meta ?? {}).map(([k, v]) => `${k}=${v ?? ""}`).join(";");
 
 /**
  * Pure entry rule. Take the side (YES/NO) whose all-in best ask (price + taker fee) is furthest below the
  * model probability, if that gap ≥ minEdge. Walk the book only while each level still clears minEdge.
  */
-export function decideEntry({ p, yesAsks, noAsks, feeSchedule, minEdge, betUsd, minPrice = 0.03, maxPriceCap = 0.97 }) {
+export function decideEntry({ p, yesAsks, noAsks, feeSchedule = DEFAULT_FEE_SCHEDULE, minEdge, betUsd, minPrice = 0.03, maxPriceCap = 0.97 }) {
   const sides = [
     { side: "YES", prob: p, asks: yesAsks },
     { side: "NO", prob: 1 - p, asks: noAsks }
@@ -43,7 +66,7 @@ export function decideEntry({ p, yesAsks, noAsks, feeSchedule, minEdge, betUsd, 
     }
   }
   if (limit === null) return { action: "skip", reason: "price_above_cap", best, sides };
-  const fill = simulateTakerBuy({ asks: best.asks, budgetUsd: betUsd, maxPrice: limit, feeSchedule });
+  const fill = takerFill(best.asks, { budgetUsd: betUsd, limitPrice: limit, feeSchedule });
   if (fill.status !== "filled" && fill.status !== "partial") return { action: "skip", reason: fill.status, best, sides };
   return { action: "enter", side: best.side, prob: best.prob, edge: best.edge, limit, fill, sides };
 }
@@ -162,7 +185,8 @@ export function createLedger({ modules, budgetUsd }) {
     state.positions = state.positions.filter((pos) => {
       if (pos.marketId !== marketId) return true;
       const won = pos.side === "YES" ? yesWon : !yesWon;
-      const r = settleBinaryPosition({ shares: pos.shares, totalUsd: pos.totalUsd, won });
+      const payoutUsd = won ? pos.shares : 0; // winning shares pay $1 each
+      const r = { payoutUsd, pnlUsd: payoutUsd - pos.totalUsd };
       const m = state.modules[pos.module];
       if (m) {
         m.balanceUsd += r.payoutUsd;
